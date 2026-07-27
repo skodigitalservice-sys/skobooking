@@ -1,0 +1,4720 @@
+import streamlit as st
+import streamlit.components.v1 as components
+import datetime
+import requests
+import json
+import urllib.parse
+import pandas as pd
+from supabase import create_client, Client
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+
+
+# Set page config
+st.set_page_config(
+    page_title="ระบบลงทะเบียนนัดหมาย สำนักงานสาธารณสุขจังหวัดสระแก้ว",
+    page_icon="🏥",
+    layout="centered",
+    initial_sidebar_state="expanded"
+)
+
+# Toast Notification Handler
+if "toast_notification" in st.session_state:
+    st.toast(st.session_state.toast_notification["message"], icon=st.session_state.toast_notification["icon"])
+    del st.session_state.toast_notification
+
+# Custom Styling (Theme colors matching the purple & clean flyer design)
+st.markdown("""
+<style>
+    /* Main Layout */
+    .stApp {
+        background-color: #F8F9FA;
+    }
+    
+    /* Title and headers */
+    .main-title {
+        font-size: 2.2rem;
+        color: #5A2A94;
+        font-weight: 800;
+        text-align: center;
+        margin-bottom: 0.2rem;
+    }
+    .sub-title {
+        font-size: 1.1rem;
+        color: #7B2CBF;
+        text-align: center;
+        margin-bottom: 2rem;
+        font-weight: 500;
+    }
+    
+    /* Cards and Containers */
+    .service-card {
+        background-color: white;
+        padding: 1.5rem;
+        border-radius: 15px;
+        border-left: 5px solid #7B2CBF;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+        margin-bottom: 1rem;
+        transition: transform 0.2s;
+    }
+    .service-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 12px rgba(123, 44, 191, 0.1);
+    }
+    
+    /* Step Indicator styling */
+    .step-container {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 2.5rem;
+        background-color: white;
+        padding: 1rem;
+        border-radius: 12px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.03);
+    }
+    .step-item {
+        flex: 1;
+        text-align: center;
+        position: relative;
+    }
+    .step-item:not(:last-child)::after {
+        content: '';
+        position: absolute;
+        top: 20px;
+        left: 50%;
+        width: 100%;
+        height: 3px;
+        background-color: #E0E0E0;
+        z-index: 1;
+    }
+    .step-item.active:not(:last-child)::after {
+        background-color: #7B2CBF;
+    }
+    .step-icon {
+        width: 40px;
+        height: 40px;
+        border-radius: 50%;
+        background-color: #E0E0E0;
+        color: #6C757D;
+        display: inline-flex;
+        justify-content: center;
+        align-items: center;
+        font-weight: bold;
+        position: relative;
+        z-index: 2;
+        font-size: 1.1rem;
+    }
+    .step-item.active .step-icon {
+        background-color: #7B2CBF;
+        color: white;
+        box-shadow: 0 0 12px rgba(123, 44, 191, 0.4);
+    }
+    .step-item.completed .step-icon {
+        background-color: #2D6A4F;
+        color: white;
+    }
+    .step-label {
+        margin-top: 8px;
+        font-size: 0.85rem;
+        color: #6C757D;
+        font-weight: 600;
+    }
+    .step-item.active .step-label {
+        color: #7B2CBF;
+    }
+    .step-item.completed .step-label {
+        color: #2D6A4F;
+    }
+    
+    /* Custom buttons styling */
+    div.stButton > button {
+        background-color: #7B2CBF;
+        color: white;
+        border-radius: 10px;
+        font-weight: 600;
+        border: none;
+        padding: 0.6rem 1.2rem;
+        transition: all 0.2s;
+    }
+    div.stButton > button:hover {
+        background-color: #5A2A94;
+        color: white;
+        box-shadow: 0 4px 10px rgba(90, 42, 148, 0.3);
+    }
+    
+    /* Success Box */
+    .success-box {
+        background-color: #D8F3DC;
+        border-left: 6px solid #2D6A4F;
+        color: #1B4332;
+        padding: 1.5rem;
+        border-radius: 12px;
+        margin-bottom: 1.5rem;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# ----------------- Dynamic CSS Theme Override -----------------
+DEPT_THEMES = {
+    "": {
+        "primary": "#5A2A94",
+        "primary_light": "#F3E8FF",
+        "text_dark": "#240046",
+        "gradient_bg": "linear-gradient(135deg, #F3E8FF 0%, #E9D8FD 100%)",
+        "banner_img": "https://img.icons8.com/color/144/hospital.png",
+        "title_thai": "ลงนัดออนไลน์",
+        "footer_bg": "#5A2A94"
+    },
+    "dental": {
+        "primary": "#7B2CBF",
+        "primary_light": "#F3E8FF",
+        "text_dark": "#240046",
+        "gradient_bg": "linear-gradient(135deg, #F3E8FF 0%, #E9D8FD 100%)",
+        "banner_img": "https://img.icons8.com/color/144/tooth.png",
+        "title_thai": "ทันตกรรม",
+        "footer_bg": "#5A2A94"
+    },
+    "thai_traditional": {
+        "primary": "#2D6A4F",
+        "primary_light": "#E8F5E9",
+        "text_dark": "#1B4332",
+        "gradient_bg": "linear-gradient(135deg, #E8F5E9 0%, #C8E6C9 100%)",
+        "banner_img": "https://img.icons8.com/color/144/mortar-and-pestle.png",
+        "title_thai": "แพทย์แผนไทย",
+        "footer_bg": "#1B4332"
+    },
+    "physical_therapy": {
+        "primary": "#0077B6",
+        "primary_light": "#E0F7FA",
+        "text_dark": "#03045E",
+        "gradient_bg": "linear-gradient(135deg, #E0F7FA 0%, #B2EBF2 100%)",
+        "banner_img": "https://img.icons8.com/color/144/physical-therapy.png",
+        "title_thai": "กายภาพบำบัด",
+        "footer_bg": "#03045E"
+    }
+}
+
+# Check credentials in Streamlit secrets
+supabase_url = st.secrets.get("SUPABASE_URL", "")
+supabase_key = st.secrets.get("SUPABASE_KEY", "")
+
+is_demo = not (supabase_url and supabase_key and "xxxxxxxx" not in supabase_url)
+
+@st.cache_resource
+def get_supabase_client() -> Client:
+    if is_demo:
+        return None
+    try:
+        return create_client(supabase_url, supabase_key)
+    except Exception as e:
+        st.sidebar.error(f"เชื่อมต่อฐานข้อมูลล้มเหลว: {e}")
+        return None
+
+supabase_client = get_supabase_client()
+
+def get_system_config(key, default=""):
+    """ดึงค่าคอนฟิกจากตาราง system_config ใน Supabase หรือ fallback ไปใช้จาก Secrets"""
+    try:
+        if not is_demo and supabase_client:
+            res = supabase_client.table("system_config").select("config_value").eq("config_key", key).execute()
+            if res.data:
+                return res.data[0]["config_value"]
+    except Exception as e:
+        print(f"Error fetching system config '{key}': {e}")
+    return st.secrets.get(key, default)
+
+liff_id = get_system_config("LINE_LIFF_ID")
+line_channel_access_token = get_system_config("LINE_CHANNEL_ACCESS_TOKEN")
+google_calendar_id = get_system_config("GOOGLE_CALENDAR_ID")
+
+def get_gcal_secret_key(dept_key):
+    mapping = {
+        "dental": "GOOGLE_CALENDAR_ID_DENTAL",
+        "thai_traditional": "GOOGLE_CALENDAR_ID_THAI",
+        "physical_therapy": "GOOGLE_CALENDAR_ID_PHYSICAL"
+    }
+    return mapping.get(dept_key, f"GOOGLE_CALENDAR_ID_{dept_key.upper()}")
+
+def get_calendar_id(dept):
+    """ดึงรหัส Google Calendar ID ของแผนกจากตารางการตั้งค่าฐานข้อมูล หรือ fallback ไปใช้จาก Secrets"""
+    try:
+        if is_demo:
+            if "settings" in st.session_state and dept in st.session_state.settings:
+                cal = st.session_state.settings[dept].get("gcal_calendar_id", "")
+                if cal:
+                    return cal
+        else:
+            if supabase_client:
+                res = supabase_client.table("system_settings").select("gcal_calendar_id").eq("department", dept).execute()
+                if res.data and res.data[0].get("gcal_calendar_id"):
+                    return res.data[0]["gcal_calendar_id"]
+    except Exception as e:
+        print(f"Error fetching calendar id for {dept}: {e}")
+        
+    s_key = get_gcal_secret_key(dept)
+    val = get_system_config(s_key)
+    return val if val else google_calendar_id
+
+# Staff Portal Config / Google Calendar Service Account Credentials
+gcal_creds = {}
+try:
+    gcal_creds_raw = get_system_config("GOOGLE_CALENDAR_CREDENTIALS")
+    if gcal_creds_raw:
+        import json
+        gcal_creds = json.loads(gcal_creds_raw)
+except Exception as e:
+    print(f"Error parsing GOOGLE_CALENDAR_CREDENTIALS: {e}")
+
+if not gcal_creds:
+    gcal_creds = st.secrets.get("google_calendar_credentials", {})
+
+if isinstance(gcal_creds, dict):
+    nested_pass = gcal_creds.get("STAFF_PASSWORD") or gcal_creds.get("staff_password")
+else:
+    nested_pass = getattr(gcal_creds, "STAFF_PASSWORD", None) or getattr(gcal_creds, "staff_password", None)
+
+staff_password = str(get_system_config("STAFF_PASSWORD") or nested_pass or "1234").strip()
+
+# LINE LIFF URL Config
+liff_url = f"https://liff.line.me/{liff_id}" if (liff_id and "xxxxxxxx" not in liff_id) else "https://line.me"
+
+# ----------------- Mock Database for Demo Mode -----------------
+if "mock_db" not in st.session_state:
+    today_str = datetime.date.today().isoformat()
+    tomorrow_str = (datetime.date.today() + datetime.timedelta(days=1)).isoformat()
+    st.session_state.mock_db = {
+        "appointments": [
+            {
+                "id": 1,
+                "department": "dental",
+                "user_id": "U1234567890",
+                "name": "นายสมชาย เรียนดี",
+                "phone": "0812345678",
+                "cid": "1100702170369",
+                "service_type": "ตรวจสุขภาพช่องปาก",
+                "appointment_date": today_str,
+                "appointment_time": "09:30",
+                "note": "ตรวจฟันประจำปี",
+                "reminder_sent": False,
+                "status": "booked",
+                "gcal_event_id": "MOCK-EVENT-0001"
+            },
+            {
+                "id": 2,
+                "department": "dental",
+                "user_id": "U0987654321",
+                "name": "นางสาวสมศรี สมดี",
+                "phone": "0898765432",
+                "cid": "1200100234567",
+                "service_type": "อุดฟัน",
+                "appointment_date": today_str,
+                "appointment_time": "14:00",
+                "note": "วัสดุอุดเดิมหลุด",
+                "reminder_sent": False,
+                "status": "booked",
+                "gcal_event_id": "MOCK-EVENT-0002"
+            },
+            {
+                "id": 3,
+                "department": "thai_traditional",
+                "user_id": "STAFF_MANUAL",
+                "name": "นายขยัน หมั่นเพียร",
+                "phone": "0855554444",
+                "cid": "3200900123456",
+                "service_type": "นวดแผนไทย",
+                "appointment_date": tomorrow_str,
+                "appointment_time": "10:00",
+                "note": "โทรมาจองนวดตัว",
+                "reminder_sent": False,
+                "status": "booked",
+                "gcal_event_id": "MOCK-EVENT-0003"
+            },
+            {
+                "id": 4,
+                "department": "physical_therapy",
+                "user_id": "U5555555555",
+                "name": "นางกมลวรรณ รักเรียน",
+                "phone": "0866667777",
+                "cid": "1200500987654",
+                "service_type": "กายภาพบำบัดฟื้นฟู",
+                "appointment_date": tomorrow_str,
+                "appointment_time": "15:30",
+                "note": "ฟื้นฟูกล้ามเนื้อ",
+                "reminder_sent": False,
+                "status": "booked",
+                "gcal_event_id": "MOCK-EVENT-0004"
+            }
+        ],
+        "services": [
+            # Dental (ทันตกรรม)
+            {"id": 1, "department": "dental", "title": "ตรวจสุขภาพช่องปาก", "description": "ตรวจเช็กฟันผุ สุขภาพเหงือก และคำแนะนำในการดูแลฟัน", "icon": "🦷🔍"},
+            {"id": 2, "department": "dental", "title": "อุดฟัน", "description": "อุดช่องว่างฟันผุด้วยวัสดุอุดฟันมาตรฐาน", "icon": "🦷💎"},
+            {"id": 3, "department": "dental", "title": "ถอนฟัน", "description": "ถอนฟันที่มีปัญหา แตกหัก หรือผุมาก", "icon": "🦷🩹"},
+            {"id": 4, "department": "dental", "title": "ขูดหินปูน", "description": "ทำความสะอาดคราบหินปูนและคราบสกปรกบนผิวฟัน", "icon": "🦷✨"},
+            {"id": 5, "department": "dental", "title": "อื่นๆ (ระบุ)", "description": "บริการทันตกรรมอื่นๆ หรือตามที่แพทย์แนะนำ", "icon": "📝"},
+            
+            # Thai Traditional Medicine (แพทย์แผนไทย)
+            {"id": 6, "department": "thai_traditional", "title": "นวดแผนไทย", "description": "นวดฟื้นฟูอาการปวดเมื่อยล้าตามส่วนต่างๆ ของร่างกาย", "icon": "💆‍♂️"},
+            {"id": 7, "department": "thai_traditional", "title": "ประคบสมุนไพร", "description": "ประคบร้อนด้วยลูกประคบสมุนไพรเพื่อลดอาการอักเสบและกระจายโลหิต", "icon": "🍃"},
+            {"id": 8, "department": "thai_traditional", "title": "อบไอน้ำสมุนไพร", "description": "อบผิวอบตัวด้วยไอน้ำสมุนไพรบำบัดเพื่อสุขภาพและระบบหายใจ", "icon": "💨"},
+            {"id": 9, "department": "thai_traditional", "title": "พอกเข่าสมุนไพร", "description": "พอกสมุนไพรลดอาการเสื่อม ปวดข้อเข่า หรืออักเสบเรื้อรัง", "icon": "🩹"},
+            {"id": 10, "department": "thai_traditional", "title": "อื่นๆ (ระบุ)", "description": "บริการแพทย์แผนไทยอื่นๆ หรือตามที่เจ้าหน้าที่วิเคราะห์", "icon": "📝"},
+            
+            # Physical Therapy (กายภาพบำบัด)
+            {"id": 11, "department": "physical_therapy", "title": "กายภาพบำบัดฟื้นฟู", "description": "ฟื้นฟูกล้ามเนื้อและข้อต่อหลังการผ่าตัด หรืออุบัติเหตุ", "icon": "🚶‍♂️"},
+            {"id": 12, "department": "physical_therapy", "title": "บำบัดและลดอาการปวด", "description": "บรรเทาอาการออฟฟิศซินโดรม ปวดหลัง ปวดคอเรื้อรังด้วยเครื่องมือและนวดบำบัด", "icon": "🩹"},
+            {"id": 13, "department": "physical_therapy", "title": "กายภาพบำบัดผู้ป่วยอัมพาต", "description": "ฝึกการเคลื่อนไหวและการทรงตัวสำหรับผู้ป่วยหลอดเลือดสมอง อัมพฤกษ์/อัมพาต", "icon": "♿"},
+            {"id": 14, "department": "physical_therapy", "title": "อื่นๆ (ระบุ)", "description": "บริการกายภาพบำบัดอื่นๆ ตามใบนัดของแพทย์", "icon": "📝"}
+        ],
+        "time_slots": {
+            "dental": {
+                today_str: {
+                    "09:30": "booked",
+                    "14:00": "booked"
+                },
+                tomorrow_str: {
+                    "10:00": "booked",
+                    "15:30": "booked"
+                }
+            },
+            "thai_traditional": {
+                tomorrow_str: {
+                    "10:00": "booked"
+                }
+            },
+            "physical_therapy": {}
+        },
+        "doctors": [
+            {
+                "id": 1,
+                "name": "ทันตแพทย์สมชาย ใจดี",
+                "department": "dental",
+                "working_days": [0, 1, 2],
+                "working_hours": ["08:30", "09:00", "09:30", "10:00", "13:30", "14:00", "14:30"],
+                "services_linked": [1, 2],
+                "status": "active"
+            },
+            {
+                "id": 2,
+                "name": "ทันตแพทย์หญิงเกศินี มีสุข",
+                "department": "dental",
+                "working_days": [2, 3, 4],
+                "working_hours": ["09:30", "10:00", "13:30", "14:00", "14:30", "15:30", "16:00"],
+                "services_linked": [3, 4],
+                "status": "active"
+            },
+            {
+                "id": 3,
+                "name": "หมอเป้ง แผนไทยสยาม",
+                "department": "thai_traditional",
+                "working_days": [0, 1, 2, 3, 4],
+                "working_hours": ["08:30", "09:30", "10:30", "13:30", "14:30", "15:30"],
+                "services_linked": [6, 7],
+                "status": "active"
+            },
+            {
+                "id": 4,
+                "name": "กภ.วีรวิชญ์ พัฒนาพลัง",
+                "department": "physical_therapy",
+                "working_days": [0, 1, 2, 3, 4],
+                "working_hours": ["08:30", "09:00", "09:30", "10:00", "13:30", "14:00", "14:30", "15:30", "16:00"],
+                "services_linked": [11, 12],
+                "status": "active"
+            }
+        ]
+    }
+
+# ----------------- Session State Initialization -----------------
+if "selected_dept" not in st.session_state:
+    st.session_state.selected_dept = ""  # '', 'dental', 'thai_traditional', 'physical_therapy'
+if "selected_doctor_id" not in st.session_state:
+    st.session_state.selected_doctor_id = "" # '' means 'ไม่ระบุแพทย์'
+if "step" not in st.session_state:
+    st.session_state.step = 1  # Step 1: Select Service
+if "selected_service" not in st.session_state:
+    st.session_state.selected_service = ""
+if "selected_date" not in st.session_state:
+    st.session_state.selected_date = datetime.date.today()
+if "selected_time" not in st.session_state:
+    st.session_state.selected_time = ""
+if "user_name" not in st.session_state:
+    st.session_state.user_name = ""
+if "user_phone" not in st.session_state:
+    st.session_state.user_phone = ""
+if "user_cid" not in st.session_state:
+    st.session_state.user_cid = ""
+if "user_note" not in st.session_state:
+    st.session_state.user_note = ""
+if "line_user_id" not in st.session_state:
+    st.session_state.line_user_id = ""
+if "line_display_name" not in st.session_state:
+    st.session_state.line_display_name = ""
+if "line_picture_url" not in st.session_state:
+    st.session_state.line_picture_url = ""
+if "appointment_id" not in st.session_state:
+    st.session_state.appointment_id = None
+
+# Process URL parameters from LINE LIFF redirect
+query_params = st.query_params
+if "userId" in query_params:
+    st.session_state.line_user_id = query_params["userId"]
+    st.session_state.line_display_name = query_params.get("displayName", "ผู้ใช้งาน LINE")
+    st.session_state.line_picture_url = query_params.get("pictureUrl", "")
+
+# ตรวจสอบ Parameter เลือกแผนกอัตโนมัติจาก Rich Menu
+if "dept" in query_params:
+    dept_val = query_params["dept"].lower()
+    if dept_val == "dental":
+        st.session_state.selected_dept = "dental"
+    elif dept_val in ("thai", "thai_traditional"):
+        st.session_state.selected_dept = "thai_traditional"
+    elif dept_val in ("physical", "physical_therapy"):
+        st.session_state.selected_dept = "physical_therapy"
+
+# ----------------- Helper Functions -----------------
+def fetch_all_departments():
+    """ดึงรายชื่อแผนกทั้งหมดที่มีการตั้งค่าในระบบ"""
+    if "settings" not in st.session_state:
+        get_settings("dental") # โหลดค่าตั้งต้นใส่ session_state.settings
+        
+    if is_demo:
+        depts = []
+        for key, val in st.session_state.settings.items():
+            depts.append({
+                "key": key,
+                "display_name": val.get("display_name") or DEPT_THEMES.get(key, {}).get("title_thai", key),
+                "theme_color": val.get("theme_color") or DEPT_THEMES.get(key, {}).get("primary", "#5A2A94"),
+                "banner_img": val.get("banner_img") or DEPT_THEMES.get(key, {}).get("banner_img", "https://img.icons8.com/color/144/hospital.png")
+            })
+        return depts
+        
+    if not supabase_client:
+        return []
+        
+    try:
+        response = supabase_client.table("system_settings").select("*").execute()
+        depts = []
+        for row in response.data:
+            key = row["department"]
+            depts.append({
+                "key": key,
+                "display_name": row.get("display_name") or DEPT_THEMES.get(key, {}).get("title_thai", key),
+                "theme_color": row.get("theme_color") or DEPT_THEMES.get(key, {}).get("primary", "#5A2A94"),
+                "banner_img": row.get("banner_img") or DEPT_THEMES.get(key, {}).get("banner_img", "https://img.icons8.com/color/144/hospital.png")
+            })
+        return depts
+    except Exception as e:
+        print(f"เกิดข้อผิดพลาดในการดึงข้อมูลแผนก: {e}")
+        return []
+
+def get_current_theme(selected_dept):
+    """สร้างข้อมูลธีมของแผนกปัจจุบันแบบพลวัต โดยรวมจากฐานข้อมูลและค่าคอนฟิก"""
+    base_theme = {
+        "primary": "#5A2A94",
+        "primary_light": "#F3E8FF",
+        "text_dark": "#240046",
+        "gradient_bg": "linear-gradient(135deg, #F3E8FF 0%, #E9D8FD 100%)",
+        "banner_img": "https://img.icons8.com/color/144/hospital.png",
+        "title_thai": "ลงนัดออนไลน์",
+        "footer_bg": "#5A2A94"
+    }
+    
+    if not selected_dept:
+        return base_theme
+        
+    settings = get_settings(selected_dept)
+    orig_theme = DEPT_THEMES.get(selected_dept, {})
+    
+    primary_color = settings.get("theme_color") or orig_theme.get("primary") or "#5A2A94"
+    banner_img = settings.get("banner_img") or orig_theme.get("banner_img") or "https://img.icons8.com/color/144/hospital.png"
+    display_name = settings.get("display_name") or orig_theme.get("title_thai") or selected_dept
+    
+    primary_light = orig_theme.get("primary_light") or "#F3E8FF"
+    text_dark = orig_theme.get("text_dark") or "#240046"
+    gradient_bg = orig_theme.get("gradient_bg") or f"linear-gradient(135deg, {primary_color}1A 0%, {primary_color}33 100%)"
+    footer_bg = primary_color
+    
+    return {
+        "primary": primary_color,
+        "primary_light": primary_light,
+        "text_dark": text_dark,
+        "gradient_bg": gradient_bg,
+        "banner_img": banner_img,
+        "title_thai": display_name,
+        "footer_bg": footer_bg
+    }
+
+def get_settings(dept):
+    """ดึงข้อมูลการตั้งค่าสำหรับแผนกที่ระบุ (หรือแผนก Dental เป็นหลักถ้าไม่ระบุ)"""
+    if "settings" not in st.session_state:
+        # กำหนดค่าเริ่มต้นใน session_state
+        st.session_state.settings = {
+            "dental": {
+                "booking_range_days": 30,
+                "working_days": [0, 1, 2, 3, 4], # Mon-Fri
+                "closed_dates": [],
+                "time_slots": ["08:30", "09:00", "09:30", "10:00", "13:30", "14:00", "14:30", "15:30", "16:00"],
+                "max_bookings_per_slot": 1,
+                "slot_configs": [],
+                "display_name": "แผนกทันตกรรม (Dental Care)",
+                "theme_color": "#7B2CBF",
+                "banner_img": "https://img.icons8.com/color/144/tooth.png",
+                "gcal_calendar_id": st.secrets.get("GOOGLE_CALENDAR_ID_DENTAL", "")
+            },
+            "thai_traditional": {
+                "booking_range_days": 30,
+                "working_days": [0, 1, 2, 3, 4],
+                "closed_dates": [],
+                "time_slots": ["08:30", "09:00", "09:30", "10:00", "13:30", "14:00", "14:30", "15:30", "16:00"],
+                "max_bookings_per_slot": 1,
+                "slot_configs": [],
+                "display_name": "แผนกแพทย์แผนไทย (Traditional Thai Medicine)",
+                "theme_color": "#2D6A4F",
+                "banner_img": "https://img.icons8.com/color/144/mortar-and-pestle.png",
+                "gcal_calendar_id": st.secrets.get("GOOGLE_CALENDAR_ID_THAI", "")
+            },
+            "physical_therapy": {
+                "booking_range_days": 30,
+                "working_days": [0, 1, 2, 3, 4],
+                "closed_dates": [],
+                "time_slots": ["08:30", "09:00", "09:30", "10:00", "13:30", "14:00", "14:30", "15:30", "16:00"],
+                "max_bookings_per_slot": 1,
+                "slot_configs": [],
+                "display_name": "แผนกกายภาพบำบัด (Physical Therapy)",
+                "theme_color": "#0077B6",
+                "banner_img": "https://img.icons8.com/color/144/physical-therapy.png",
+                "gcal_calendar_id": st.secrets.get("GOOGLE_CALENDAR_ID_PHYSICAL", "")
+            }
+        }
+        
+    if is_demo:
+        return st.session_state.settings.get(dept, st.session_state.settings["dental"])
+        
+    if not supabase_client:
+        return st.session_state.settings.get(dept, st.session_state.settings["dental"])
+        
+    try:
+        # ดึงการตั้งค่าจาก Supabase
+        response = supabase_client.table("system_settings").select("*").eq("department", dept).execute()
+        if response.data:
+            row = response.data[0]
+            working_days = row.get("working_days", [0, 1, 2, 3, 4])
+            closed_dates = row.get("closed_dates", [])
+            time_slots = row.get("time_slots", ["08:30", "09:00", "09:30", "10:00", "13:30", "14:00", "14:30", "15:30", "16:00"])
+            time_slots = [":".join(s.split(":")[:2]) for s in time_slots]
+            
+            return {
+                "booking_range_days": row.get("booking_range_days", 30),
+                "working_days": working_days,
+                "closed_dates": closed_dates,
+                "time_slots": time_slots,
+                "max_bookings_per_slot": row.get("max_bookings_per_slot", 1),
+                "slot_configs": row.get("slot_configs", []),
+                "display_name": row.get("display_name"),
+                "theme_color": row.get("theme_color"),
+                "banner_img": row.get("banner_img"),
+                "gcal_calendar_id": row.get("gcal_calendar_id", "")
+            }
+        else:
+            # หากไม่มีให้เพิ่มค่าตั้งต้นเข้าไป
+            default_set = st.session_state.settings.get(dept, st.session_state.settings["dental"])
+            supabase_client.table("system_settings").insert({
+                "department": dept,
+                "booking_range_days": default_set["booking_range_days"],
+                "working_days": default_set["working_days"],
+                "closed_dates": default_set["closed_dates"],
+                "time_slots": default_set["time_slots"],
+                "max_bookings_per_slot": default_set["max_bookings_per_slot"],
+                "slot_configs": default_set.get("slot_configs", []),
+                "display_name": default_set.get("display_name"),
+                "theme_color": default_set.get("theme_color"),
+                "banner_img": default_set.get("banner_img"),
+                "gcal_calendar_id": default_set.get("gcal_calendar_id", "")
+            }).execute()
+            return default_set
+    except Exception as e:
+        print(f"เกิดข้อผิดพลาดในการดึงการตั้งค่าจาก DB: {e}")
+        return st.session_state.settings.get(dept, st.session_state.settings["dental"])
+
+def update_settings_db(dept, booking_range_days, working_days, closed_dates, time_slots, max_bookings_per_slot, slot_configs=None, display_name=None, theme_color=None, banner_img=None, gcal_calendar_id=None):
+    """อัปเดตการตั้งค่าของแผนก"""
+    time_slots = [":".join(s.strip().split(":")[:2]) for s in time_slots if s.strip()]
+    if slot_configs is None:
+        slot_configs = []
+    
+    if is_demo:
+        if "settings" not in st.session_state:
+            get_settings(dept)
+        
+        curr = st.session_state.settings.get(dept, {})
+        final_display_name = display_name if display_name is not None else curr.get("display_name", DEPT_THEMES.get(dept, {}).get("title_thai", dept))
+        final_theme_color = theme_color if theme_color is not None else curr.get("theme_color", DEPT_THEMES.get(dept, {}).get("primary", "#5A2A94"))
+        final_banner_img = banner_img if banner_img is not None else curr.get("banner_img", DEPT_THEMES.get(dept, {}).get("banner_img", "https://img.icons8.com/color/144/hospital.png"))
+
+        final_gcal_id = gcal_calendar_id if gcal_calendar_id is not None else curr.get("gcal_calendar_id", "")
+        st.session_state.settings[dept] = {
+            "booking_range_days": int(booking_range_days),
+            "working_days": [int(d) for d in working_days],
+            "closed_dates": [str(d) for d in closed_dates],
+            "time_slots": time_slots,
+            "max_bookings_per_slot": int(max_bookings_per_slot),
+            "slot_configs": slot_configs,
+            "display_name": final_display_name,
+            "theme_color": final_theme_color,
+            "banner_img": final_banner_img,
+            "gcal_calendar_id": final_gcal_id
+        }
+        return True, "อัปเดตการตั้งค่าสำเร็จ (โหมดสาธิต)"
+        
+    if not supabase_client:
+        return False, "ไม่สามารถเชื่อมต่อฐานข้อมูลได้"
+        
+    try:
+        response = supabase_client.table("system_settings").select("*").eq("department", dept).execute()
+        
+        if response.data:
+            curr = response.data[0]
+        else:
+            curr = {}
+            
+        final_display_name = display_name if display_name is not None else curr.get("display_name", DEPT_THEMES.get(dept, {}).get("title_thai", dept))
+        final_theme_color = theme_color if theme_color is not None else curr.get("theme_color", DEPT_THEMES.get(dept, {}).get("primary", "#5A2A94"))
+        final_banner_img = banner_img if banner_img is not None else curr.get("banner_img", DEPT_THEMES.get(dept, {}).get("banner_img", "https://img.icons8.com/color/144/hospital.png"))
+
+        final_gcal_id = gcal_calendar_id if gcal_calendar_id is not None else curr.get("gcal_calendar_id", "")
+        data = {
+            "department": dept,
+            "booking_range_days": int(booking_range_days),
+            "working_days": [int(d) for d in working_days],
+            "closed_dates": [str(d) for d in closed_dates],
+            "time_slots": time_slots,
+            "max_bookings_per_slot": int(max_bookings_per_slot),
+            "slot_configs": slot_configs,
+            "display_name": final_display_name,
+            "theme_color": final_theme_color,
+            "banner_img": final_banner_img,
+            "gcal_calendar_id": final_gcal_id
+        }
+        if response.data:
+            supabase_client.table("system_settings").update(data).eq("department", dept).execute()
+        else:
+            supabase_client.table("system_settings").insert(data).execute()
+        return True, "อัปเดตการตั้งค่าเรียบร้อยแล้ว"
+    except Exception as e:
+        return False, f"เกิดข้อผิดพลาดในการบันทึกการตั้งค่า: {e}"
+
+def create_department_db(key, display_name, theme_color, banner_img):
+    key = key.strip().lower()
+    display_name = display_name.strip()
+    if not key or not display_name:
+        return False, "กรุณากรอกรหัสแผนกและชื่อแผนกให้ครบถ้วน"
+    
+    if is_demo:
+        if "settings" not in st.session_state:
+            get_settings(key)
+        if key in st.session_state.settings:
+            return False, "มีรหัสแผนกนี้อยู่ในระบบแล้ว"
+            
+        # สร้างปฏิทินย่อยอัตโนมัติบน Google Calendar
+        new_gcal_id = create_secondary_calendar(display_name)
+        if not new_gcal_id:
+            new_gcal_id = f"MOCK-CALENDAR-{key}@group.calendar.google.com"
+            
+        st.session_state.settings[key] = {
+            "booking_range_days": 30,
+            "working_days": [0, 1, 2, 3, 4],
+            "closed_dates": [],
+            "time_slots": ["08:30", "09:00", "09:30", "10:00", "13:30", "14:00", "14:30", "15:30", "16:00"],
+            "max_bookings_per_slot": 1,
+            "slot_configs": [],
+            "display_name": display_name,
+            "theme_color": theme_color,
+            "banner_img": banner_img,
+            "gcal_calendar_id": new_gcal_id
+        }
+        return True, f"เพิ่มแผนกสำเร็จ (สร้างปฏิทินย่อย: {new_gcal_id})"
+        
+    if not supabase_client:
+        return False, "ไม่สามารถเชื่อมต่อฐานข้อมูลได้"
+        
+    try:
+        res = supabase_client.table("system_settings").select("id").eq("department", key).execute()
+        if res.data:
+            return False, "มีรหัสแผนกนี้อยู่ในระบบแล้ว"
+            
+        # สร้างปฏิทินย่อยอัตโนมัติบน Google Calendar
+        new_gcal_id = create_secondary_calendar(display_name)
+        
+        supabase_client.table("system_settings").insert({
+            "department": key,
+            "display_name": display_name,
+            "theme_color": theme_color,
+            "banner_img": banner_img,
+            "booking_range_days": 30,
+            "working_days": [0, 1, 2, 3, 4],
+            "closed_dates": [],
+            "time_slots": ["08:30", "09:00", "09:30", "10:00", "13:30", "14:00", "14:30", "15:30", "16:00"],
+            "max_bookings_per_slot": 1,
+            "slot_configs": [],
+            "gcal_calendar_id": new_gcal_id or ""
+        }).execute()
+        
+        msg = f"เพิ่มแผนกใหม่ในระบบสำเร็จ"
+        if new_gcal_id:
+            msg += f" (สร้างและแชร์ปฏิทินย่อยอัตโนมัติเรียบร้อย)"
+        return True, msg
+    except Exception as e:
+        return False, f"เกิดข้อผิดพลาด: {e}"
+
+def update_department_db(key, display_name, theme_color, banner_img):
+    display_name = display_name.strip()
+    if not display_name:
+        return False, "กรุณากรอกชื่อแผนก"
+        
+    if is_demo:
+        if "settings" not in st.session_state:
+            get_settings(key)
+        if key not in st.session_state.settings:
+            return False, "ไม่พบข้อมูลแผนกนี้"
+        st.session_state.settings[key]["display_name"] = display_name
+        st.session_state.settings[key]["theme_color"] = theme_color
+        st.session_state.settings[key]["banner_img"] = banner_img
+        return True, "แก้ไขข้อมูลแผนกในระบบสาธิตสำเร็จ"
+        
+    if not supabase_client:
+        return False, "ไม่สามารถเชื่อมต่อฐานข้อมูลได้"
+        
+    try:
+        supabase_client.table("system_settings").update({
+            "display_name": display_name,
+            "theme_color": theme_color,
+            "banner_img": banner_img
+        }).eq("department", key).execute()
+        return True, "แก้ไขข้อมูลแผนกสำเร็จ"
+    except Exception as e:
+        return False, f"เกิดข้อผิดพลาด: {e}"
+
+def delete_department_db(key):
+    if is_demo:
+        if "settings" not in st.session_state:
+            get_settings(key)
+        if key in st.session_state.settings:
+            cal_id = st.session_state.settings[key].get("gcal_calendar_id", "")
+            delete_secondary_calendar(cal_id)
+            del st.session_state.settings[key]
+            if "services" in st.session_state.mock_db:
+                st.session_state.mock_db["services"] = [s for s in st.session_state.mock_db["services"] if s.get("department") != key]
+            return True, "ลบแผนกและปฏิทินย่อยที่เกี่ยวข้องสำเร็จ (ระบบสาธิต)"
+        return False, "ไม่พบแผนกที่ต้องการลบ"
+        
+    if not supabase_client:
+        return False, "ไม่สามารถเชื่อมต่อฐานข้อมูลได้"
+        
+    try:
+        # ค้นหาและลบปฏิทินย่อยของแผนกนี้ใน Google Calendar
+        res = supabase_client.table("system_settings").select("gcal_calendar_id").eq("department", key).execute()
+        if res.data:
+            cal_id = res.data[0].get("gcal_calendar_id", "")
+            delete_secondary_calendar(cal_id)
+            
+        supabase_client.table("system_settings").delete().eq("department", key).execute()
+        supabase_client.table("services").delete().eq("department", key).execute()
+        supabase_client.table("time_slots").delete().eq("department", key).execute()
+        return True, "ลบแผนกบริการและลบปฏิทินย่อยที่เชื่อมโยงเรียบร้อยแล้ว"
+    except Exception as e:
+        return False, f"เกิดข้อผิดพลาด: {e}"
+
+selected_dept = st.session_state.get("selected_dept", "")
+theme = get_current_theme(selected_dept)
+
+# Override CSS properties based on current theme
+st.markdown(f"""
+<style>
+    .main-title {{
+        color: {theme['primary']} !important;
+    }}
+    .sub-title {{
+        color: {theme['primary']} !important;
+    }}
+    .service-card {{
+        border-left: 5px solid {theme['primary']} !important;
+    }}
+    .step-item.active::after {{
+        background-color: {theme['primary']} !important;
+    }}
+    .step-item.active .step-icon {{
+        background-color: {theme['primary']} !important;
+        box-shadow: 0 0 12px {theme['primary']}80 !important;
+    }}
+    .step-item.active .step-label {{
+        color: {theme['primary']} !important;
+    }}
+    div.stButton > button {{
+        background-color: {theme['primary']} !important;
+    }}
+    div.stButton > button:hover {{
+        background-color: {theme['text_dark']} !important;
+        box-shadow: 0 4px 10px {theme['text_dark']}80 !important;
+    }}
+</style>
+""", unsafe_allow_html=True)
+
+def format_thai_date(date_obj):
+    """แปลงวันที่แบบ Python ให้เป็นภาษาไทย เช่น 12 มิถุนายน 2567 (พุธ)"""
+    if isinstance(date_obj, str):
+        try:
+            date_obj = datetime.date.fromisoformat(date_obj)
+        except Exception:
+            return date_obj
+            
+    thai_months = [
+        "", "มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน",
+        "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม"
+    ]
+    thai_days = ["จันทร์", "อังคาร", "พุธ", "พฤหัสบดี", "ศุกร์", "เสาร์", "อาทิตย์"]
+    
+    day = date_obj.day
+    month = thai_months[date_obj.month]
+    year = date_obj.year + 543
+    day_of_week = thai_days[date_obj.weekday()]
+    
+    return f"{day} {month} {year} ({day_of_week})"
+
+def fetch_appointment_by_id(app_id):
+    """ดึงข้อมูลการนัดหมายตาม ID"""
+    if is_demo:
+        cleaned_id = str(app_id).replace("DEMO-", "")
+        for app in st.session_state.mock_db["appointments"]:
+            if str(app.get("id")) == cleaned_id:
+                return app
+        return None
+    if not supabase_client:
+        return None
+    try:
+        response = supabase_client.table("appointments").select("*").eq("id", app_id).execute()
+        return response.data[0] if response.data else None
+    except Exception as e:
+        print(f"เกิดข้อผิดพลาดในการดึงข้อมูลนัดหมาย {app_id}: {e}")
+        return None
+
+def render_appointment_details_view(app_id):
+    st.markdown("""
+    <div style="text-align: center; margin-bottom: 1.5rem;">
+        <h2 style="color: #5A2A94; font-weight: 800;">🏥 รายละเอียดการนัดหมาย</h2>
+        <p style="color: #666;">ข้อมูลการนัดหมายเข้าจองคิวรับบริการ สสจ.สระแก้ว</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    with st.spinner("กำลังโหลดข้อมูลการนัดหมาย..."):
+        app = fetch_appointment_by_id(app_id)
+        
+    if not app:
+        st.error("❌ ไม่พบข้อมูลการนัดหมายนี้ หรือการนัดหมายอาจถูกยกเลิกไปแล้ว")
+        if st.button("⬅️ กลับสู่หน้าลงทะเบียนจองคิวใหม่", use_container_width=True):
+            st.query_params.clear()
+            st.rerun()
+        return
+        
+    # Get department details
+    dept = app.get("department", "")
+    dept_theme = DEPT_THEMES.get(dept, DEPT_THEMES[""])
+    dept_name = dept_theme.get("title_thai", "บริการทั่วไป")
+    if not dept_name.startswith("แผนก"):
+        dept_name = f"แผนก{dept_name}"
+        
+    # Format date and time
+    raw_date = app.get("appointment_date", "")
+    try:
+        date_obj = datetime.date.fromisoformat(raw_date)
+        thai_date_str = format_thai_date(date_obj)
+    except Exception:
+        thai_date_str = raw_date
+        
+    raw_time = app.get("appointment_time", "")
+    time_str = ":".join(str(raw_time).split(":")[:2])
+    q_num = get_queue_number(time_str)
+    
+    st.markdown(f"""
+    <div class="success-box" style="text-align: center; padding: 1.5rem; background-color: #E8F5E9; border-radius: 12px; margin-bottom: 1.5rem; border-left: 6px solid #2D6A4F;">
+        <h3 style="margin: 0; color: #1B4332;">📅 ยืนยันสิทธิ์การนัดหมาย</h3>
+        <p style="margin-top: 0.5rem; margin-bottom: 0.2rem; font-size: 1.4rem; color: {dept_theme['primary']};"><b>ลำดับคิวของคุณคือ: คิวที่ {q_num}</b></p>
+        <p style="margin-top: 0rem; margin-bottom: 0; color: #666; font-size: 0.9rem;">รหัสอ้างอิงการจองคิว: #{app.get('id')}</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    st.markdown(f"""
+    <div style="background-color: white; padding: 1.2rem; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); margin-bottom: 1.5rem; border-left: 5px solid {dept_theme['primary']};">
+        <div style="display: flex; justify-content: space-between; align-items: flex-start; padding: 0.6rem 0; border-bottom: 1px solid #eee;">
+            <span style="color: #666; font-weight: bold; flex-shrink: 0; min-width: 115px;">แผนกบริการ:</span>
+            <span style="text-align: right; font-weight: bold; color: {dept_theme['primary']}; word-break: break-word; flex-grow: 1; padding-left: 10px;">{dept_name}</span>
+        </div>
+        <div style="display: flex; justify-content: space-between; align-items: flex-start; padding: 0.6rem 0; border-bottom: 1px solid #eee;">
+            <span style="color: #666; font-weight: bold; flex-shrink: 0; min-width: 115px;">ประเภทบริการ:</span>
+            <span style="text-align: right; font-weight: bold; color: {dept_theme['primary']}; word-break: break-word; flex-grow: 1; padding-left: 10px;">{app.get('service_type', '')}</span>
+        </div>
+        <div style="display: flex; justify-content: space-between; align-items: flex-start; padding: 0.6rem 0; border-bottom: 1px solid #eee;">
+            <span style="color: #666; font-weight: bold; flex-shrink: 0; min-width: 115px;">ชื่อผู้รับบริการ:</span>
+            <span style="text-align: right; word-break: break-word; flex-grow: 1; padding-left: 10px;">{app.get('name', '')}</span>
+        </div>
+        <div style="display: flex; justify-content: space-between; align-items: flex-start; padding: 0.6rem 0; border-bottom: 1px solid #eee;">
+            <span style="color: #666; font-weight: bold; flex-shrink: 0; min-width: 115px;">เบอร์โทรติดต่อ:</span>
+            <span style="text-align: right; word-break: break-word; flex-grow: 1; padding-left: 10px;">{app.get('phone', '')}</span>
+        </div>
+        <div style="display: flex; justify-content: space-between; align-items: flex-start; padding: 0.6rem 0; border-bottom: 1px solid #eee;">
+            <span style="color: #666; font-weight: bold; flex-shrink: 0; min-width: 115px;">วันที่นัดหมาย:</span>
+            <span style="text-align: right; font-weight: bold; word-break: break-word; flex-grow: 1; padding-left: 10px;">{thai_date_str}</span>
+        </div>
+        <div style="display: flex; justify-content: space-between; align-items: flex-start; padding: 0.6rem 0; border-bottom: 1px solid #eee;">
+            <span style="color: #666; font-weight: bold; flex-shrink: 0; min-width: 115px;">เวลานัดหมาย:</span>
+            <span style="text-align: right; font-weight: bold; color: {dept_theme['primary']}; word-break: break-word; flex-grow: 1; padding-left: 10px;">{time_str} น.</span>
+        </div>
+        <div style="display: flex; justify-content: space-between; align-items: flex-start; padding: 0.6rem 0;">
+            <span style="color: #666; font-weight: bold; flex-shrink: 0; min-width: 115px;">หมายเหตุ/อาการ:</span>
+            <span style="text-align: right; word-break: break-word; flex-grow: 1; padding-left: 10px;">{app.get('note', '') or '-'}</span>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    st.markdown("""
+    <div style="background-color: #E8F1F2; padding: 1rem; border-radius: 8px; font-size: 0.9rem; color: #1D3557; margin-bottom: 1.5rem;">
+        <b>💡 ข้อแนะนำในการเข้ารับบริการ:</b>
+        <ul style="margin: 0.5rem 0 0 1rem; padding: 0;">
+            <li>กรุณาเดินทางมาถึง สสจ.สระแก้ว ก่อนเวลานัดหมายอย่างน้อย 15 นาที</li>
+            <li>กรุณานำ<b>บัตรประจำตัวประชาชนตัวจริง</b>มาด้วยในวันนัดหมาย</li>
+            <li>หากต้องการยกเลิกหรือเลื่อนนัดหมาย กรุณาติดต่อล่วงหน้าอย่างน้อย 1 วัน</li>
+        </ul>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Google Calendar URL Generator
+    try:
+        date_formatted = date_obj.strftime("%Y%m%d")
+        hour_str, min_str = time_str.split(":")
+        start_dt = f"{date_formatted}T{hour_str}{min_str}00"
+        end_time_min = int(min_str) + 30
+        end_time_hour = int(hour_str)
+        if end_time_min >= 60:
+            end_time_min -= 60
+            end_time_hour += 1
+        end_dt = f"{date_formatted}T{end_time_hour:02d}{end_time_min:02d}00"
+        
+        title = f"นัดหมาย{dept_name} [#{app.get('id')}]: {app.get('service_type')}"
+        details = f"รหัสอ้างอิงการจองคิว: #{app.get('id')}\nแผนก: {dept_name}\nประเภทบริการ: {app.get('service_type')}\nผู้เข้ารับบริการ: {app.get('name')}\nเบอร์โทรศัพท์ติดต่อ: {app.get('phone')}\n\nสสจ.สระแก้ว ใส่ใจสุขภาพ เคียงข้างประชาชน"
+        location = "สำนักงานสาธารณสุขจังหวัดสระแก้ว อ.เมืองสระแก้ว จ.สระแก้ว"
+        
+        active_calendar_id = get_calendar_id(dept)
+        gcal_url = f"https://calendar.google.com/calendar/render?action=TEMPLATE&text={urllib.parse.quote(title)}&dates={start_dt}/{end_dt}&details={urllib.parse.quote(details)}&location={urllib.parse.quote(location)}"
+        if active_calendar_id:
+            gcal_url += f"&src={urllib.parse.quote(active_calendar_id)}"
+    except Exception:
+        gcal_url = None
+
+    # Actions buttons
+    col1, col2 = st.columns(2)
+    with col1:
+        if gcal_url:
+            st.markdown(f'<a href="{gcal_url}" target="_blank" style="text-decoration: none;"><button style="width:100%; height:45px; background-color:#4285F4; color:white; border-radius:10px; font-weight:600; border:none;">📅 บันทึกในปฏิทิน Google</button></a>', unsafe_allow_html=True)
+        else:
+            st.button("📅 บันทึกในปฏิทิน (ไม่พร้อมใช้งาน)", disabled=True, use_container_width=True)
+            
+    with col2:
+        if st.button("⬅️ กลับสู่หน้าลงทะเบียนใหม่", use_container_width=True):
+            st.query_params.clear()
+            st.rerun()
+            
+    st.divider()
+    
+    # Cancel Button
+    if "confirm_cancel_id" in st.session_state and st.session_state.confirm_cancel_id == app_id:
+        st.warning("⚠️ คุณต้องการยกเลิกการนัดหมายนี้ใช่หรือไม่? การกระทำนี้ไม่สามารถเรียกคืนได้")
+        cc1, cc2 = st.columns(2)
+        with cc1:
+            if st.button("ยืนยันยกเลิกนัดหมาย 🛑", use_container_width=True):
+                with st.spinner("กำลังดำเนินการยกเลิก..."):
+                    success, msg = cancel_appointment_db(app_id)
+                if success:
+                    st.toast("ยกเลิกการนัดหมายสำเร็จแล้ว", icon="✅")
+                    # Clear query params and session state
+                    st.query_params.clear()
+                    if "confirm_cancel_id" in st.session_state:
+                        del st.session_state.confirm_cancel_id
+                    st.success("🎉 ยกเลิกการนัดหมายสำเร็จแล้ว ระบบจะนำคุณกลับหน้าหลักใน 3 วินาที...")
+                    
+                    # Try to send cancel LINE notification if token is available (except if completed)
+                    if app.get("user_id") and app.get("user_id") != "NON_LINE_USER" and not app.get("user_id").startswith("STAFF"):
+                        if app.get("status", "booked") != "completed":
+                            cancel_msg = f"แจ้งเตือน: นัดหมาย {dept_name} วันที่ {thai_date_str} เวลา {time_str} น. ของท่าน ได้รับการยกเลิกเรียบร้อยแล้วค่ะ"
+                            send_line_push_message(app.get("user_id"), cancel_msg)
+                        
+                    import time
+                    time.sleep(3)
+                    st.rerun()
+                else:
+                    st.error(f"ไม่สามารถยกเลิกได้: {msg}")
+        with cc2:
+            if st.button("ยกเลิก ✖️", use_container_width=True):
+                del st.session_state.confirm_cancel_id
+                st.rerun()
+    else:
+        if st.button("❌ ยกเลิกการนัดหมายนี้", use_container_width=True):
+            st.session_state.confirm_cancel_id = app_id
+            st.rerun()
+
+def validate_thai_cid(cid):
+    """ตรวจสอบเลขบัตรประจำตัวประชาชน 13 หลัก"""
+    if not cid or len(cid) != 13 or not cid.isdigit():
+        return False
+    # สูตรคำนวณ Checksum บัตรประชาชนไทย
+    sum_val = sum(int(cid[i]) * (13 - i) for i in range(12))
+    check_digit = (11 - (sum_val % 11)) % 10
+    return check_digit == int(cid[12])
+
+def get_queue_number(app_time):
+    """แปลงเวลาจองเป็นลำดับคิว โดยเริ่ม 08:30 เป็นคิวที่ 1"""
+    t_clean = ":".join(str(app_time).split(":")[:2])
+    slots = ["08:30", "09:00", "09:30", "10:00", "13:30", "14:00", "14:30", "15:30", "16:00"]
+    try:
+        return slots.index(t_clean) + 1
+    except ValueError:
+        return 1
+
+def get_calendar_service():
+    """สร้าง Google Calendar API Service จากคีย์ลับใน secrets"""
+    creds_info = st.secrets.get("google_calendar_credentials", None)
+    if not creds_info:
+        return None
+    try:
+        creds_dict = dict(creds_info)
+        if "private_key" in creds_dict:
+            pk_val = creds_dict["private_key"]
+            if pk_val.startswith("-----BEGIN PRIVATE KEY-----\\nn"):
+                pk_val = pk_val.replace("-----BEGIN PRIVATE KEY-----\\nn", "-----BEGIN PRIVATE KEY-----\\n", 1)
+            elif pk_val.startswith("-----BEGIN PRIVATE KEY-----\nn"):
+                pk_val = pk_val.replace("-----BEGIN PRIVATE KEY-----\nn", "-----BEGIN PRIVATE KEY-----\n", 1)
+            creds_dict["private_key"] = pk_val.replace("\\n", "\n")
+            
+        scopes = ['https://www.googleapis.com/auth/calendar']
+        creds = service_account.Credentials.from_service_account_info(creds_dict, scopes=scopes)
+        service = build('calendar', 'v3', credentials=creds)
+        return service
+    except Exception as e:
+        print(f"เกิดข้อผิดพลาดในการเชื่อมต่อ Google Calendar API: {e}")
+        return None
+
+def create_gcal_event(dept, title, appointment_date, appointment_time, description, location):
+    """บันทึกนัดหมายลงใน Google Calendar อัตโนมัติในเบื้องหลัง"""
+    service = get_calendar_service()
+    if not service:
+        print("คำเตือน: ยังไม่ได้ตั้งค่า google_calendar_credentials จึงข้ามการบันทึกลงปฏิทินกลาง รพ.สต.")
+        return None
+        
+    calendar_id = get_calendar_id(dept)
+    if not calendar_id:
+        print(f"คำเตือน: ไม่พบ Calendar ID สำหรับแผนก {dept} หรือปฏิทินกลาง จึงข้ามการบันทึก")
+        return None
+        
+    # แปลงเวลา
+    date_str = appointment_date.isoformat() if hasattr(appointment_date, "isoformat") else str(appointment_date)
+    time_only = ":".join(appointment_time.split(":")[:2])
+    
+    # คำนวณเวลาสิ้นสุดนัดหมาย
+    hour_str, min_str = time_only.split(":")
+    start_dt_str = f"{date_str}T{hour_str}:{min_str}:00"
+    
+    start_time = datetime.datetime.combine(
+        datetime.date.fromisoformat(date_str) if isinstance(appointment_date, (datetime.date, datetime.datetime)) else datetime.datetime.strptime(date_str, "%Y-%m-%d").date(),
+        datetime.time(int(hour_str), int(min_str))
+    )
+    end_time = start_time + datetime.timedelta(minutes=30)
+    end_dt_str = end_time.strftime("%Y-%m-%dT%H:%M:%S")
+    
+    event = {
+        'summary': title,
+        'location': location,
+        'description': description,
+        'start': {
+            'dateTime': start_dt_str,
+            'timeZone': 'Asia/Bangkok',
+        },
+        'end': {
+            'dateTime': end_dt_str,
+            'timeZone': 'Asia/Bangkok',
+        },
+        'reminders': {
+            'useDefault': False,
+            'overrides': [
+                {'method': 'popup', 'minutes': 30},
+            ],
+        },
+    }
+    
+    try:
+        event_result = service.events().insert(calendarId=calendar_id, body=event).execute()
+        print(f"บันทึกคิวลง Google Calendar กลางเรียบร้อยแล้ว: {event_result.get('htmlLink')}")
+        return event_result.get('id')
+    except Exception as e:
+        print(f"เกิดข้อผิดพลาดในการบันทึกคิวลง Google Calendar: {e}")
+        return None
+
+def create_secondary_calendar(display_name):
+    """สร้างปฏิทินย่อยใหม่ในบัญชี Google Calendar และตั้งสิทธิ์แชร์เป็นสาธารณะ (Public Read-Only) อัตโนมัติ"""
+    service = get_calendar_service()
+    if not service:
+        print("คำเตือน: ยังไม่ได้ตั้งค่า google_calendar_credentials จึงข้ามการสร้างปฏิทินย่อย")
+        return None
+    try:
+        calendar_body = {
+            'summary': f'{display_name} - สสจ.สระแก้ว',
+            'timeZone': 'Asia/Bangkok'
+        }
+        created_calendar = service.calendars().insert(body=calendar_body).execute()
+        new_calendar_id = created_calendar['id']
+        print(f"สร้างปฏิทินย่อยสำเร็จ ID: {new_calendar_id}")
+        
+        # ตั้งสิทธิ์แชร์ปฏิทินเป็นสาธารณะ เพื่อให้คนไข้บันทึกลงเครื่องตนเองได้
+        rule = {
+            'scope': {
+                'type': 'default',
+            },
+            'role': 'reader'
+        }
+        service.acl().insert(calendarId=new_calendar_id, body=rule).execute()
+        print("แชร์สิทธิ์ปฏิทินย่อยเป็นสาธารณะเรียบร้อยแล้ว")
+        return new_calendar_id
+    except Exception as e:
+        print(f"เกิดข้อผิดพลาดในการสร้างปฏิทินย่อย: {e}")
+        return None
+
+def delete_secondary_calendar(calendar_id):
+    """ลบปฏิทินย่อยออกจากบัญชี Google Calendar เมื่อแผนกถูกลบ"""
+    if not calendar_id or "MOCK-CALENDAR" in calendar_id:
+        return False
+    service = get_calendar_service()
+    if not service:
+        print("คำเตือน: ยังไม่ได้ตั้งค่า google_calendar_credentials จึงข้ามการลบปฏิทินย่อย")
+        return False
+    try:
+        service.calendars().delete(calendarId=calendar_id).execute()
+        print(f"ลบปฏิทินย่อยออกจาก Google Calendar สำเร็จ ID: {calendar_id}")
+        return True
+    except Exception as e:
+        print(f"เกิดข้อผิดพลาดในการลบปฏิทินย่อย: {e}")
+        return False
+
+def delete_gcal_event(dept, event_id):
+    """ลบเหตุการณ์นัดหมายออกจาก Google Calendar ตามรหัสอ้างอิง"""
+    if not event_id:
+        return False
+    service = get_calendar_service()
+    if not service:
+        print("คำเตือน: ยังไม่ได้ตั้งค่า google_calendar_credentials จึงข้ามการลบเหตุการณ์ใน Google Calendar")
+        return False
+        
+    calendar_id = get_calendar_id(dept)
+    if not calendar_id:
+        print(f"คำเตือน: ไม่พบ Calendar ID สำหรับแผนก {dept} จึงข้ามการลบ")
+        return False
+        
+    try:
+        service.events().delete(calendarId=calendar_id, eventId=event_id).execute()
+        print(f"ลบเหตุการณ์ใน Google Calendar เรียบร้อยแล้ว: {event_id}")
+        return True
+    except Exception as e:
+        print(f"เกิดข้อผิดพลาดในการลบเหตุการณ์ใน Google Calendar: {e}")
+        return False
+
+def get_booked_slots(date_obj, dept, selected_service=None, doctor_id=None):
+    """ดึงเวลาที่ถูกจองไปแล้วในวันที่เลือก โดยคำนวณแยกตามสิทธิ์แพทย์ หรือ สล็อตเวลากลางของแผนก"""
+    date_str = date_obj.isoformat()
+    weekday = date_obj.weekday()
+    
+    # ดึงรายชื่อแพทย์ปฏิบัติงานในแผนก
+    all_dept_doctors = fetch_doctors(dept)
+    
+    # หากไม่มีข้อมูลแพทย์ ให้ถอยกลับไปใช้กฎสล็อตเวลากลางของแผนกเดิม
+    if not all_dept_doctors:
+        dept_settings = get_settings(dept)
+        slot_configs = dept_settings.get("slot_configs", [])
+        
+        slot_counts = {}
+        if is_demo:
+            appointments = st.session_state.mock_db.get("appointments", [])
+            for app in appointments:
+                if app.get("department") == dept and app.get("appointment_date") == date_str and app.get("status") != "cancelled":
+                    t = app.get("appointment_time")
+                    t_formatted = ":".join(t.split(":")[:2])
+                    slot_counts[t_formatted] = slot_counts.get(t_formatted, 0) + 1
+        else:
+            if not supabase_client:
+                return []
+            try:
+                response = supabase_client.table("appointments")\
+                    .select("appointment_time")\
+                    .eq("department", dept)\
+                    .eq("appointment_date", date_str)\
+                    .neq("status", "cancelled")\
+                    .execute()
+                for row in response.data:
+                    time_raw = row["appointment_time"]
+                    time_formatted = ":".join(time_raw.split(":")[:2])
+                    slot_counts[time_formatted] = slot_counts.get(time_formatted, 0) + 1
+            except Exception as e:
+                print(f"Error fetching raw slots: {e}")
+                return []
+
+        booked = []
+        if slot_configs:
+            for config in slot_configs:
+                time_str = config.get("time")
+                capacity = config.get("capacity", 1)
+                allowed_services = config.get("allowed_services", [])
+                
+                count = slot_counts.get(time_str, 0)
+                if count >= capacity:
+                    booked.append(time_str)
+                    continue
+                if selected_service and allowed_services:
+                    allowed_cleaned = [s.strip() for s in allowed_services if s.strip()]
+                    if allowed_cleaned and selected_service.strip() not in allowed_cleaned and "ทุกบริการ" not in allowed_cleaned:
+                        booked.append(time_str)
+        else:
+            max_bookings = dept_settings.get("max_bookings_per_slot", 1)
+            for time_str, count in slot_counts.items():
+                if count >= max_bookings:
+                    booked.append(time_str)
+        return booked
+
+    # หากมีการระบุเจาะจงแพทย์
+    if doctor_id:
+        slot_counts = {}
+        if is_demo:
+            appointments = st.session_state.mock_db.get("appointments", [])
+            for app in appointments:
+                if (app.get("doctor_id") == doctor_id or str(app.get("doctor_id")) == str(doctor_id)) and app.get("appointment_date") == date_str and app.get("status") != "cancelled":
+                    t = app.get("appointment_time")
+                    t_formatted = ":".join(t.split(":")[:2])
+                    slot_counts[t_formatted] = slot_counts.get(t_formatted, 0) + 1
+        else:
+            if not supabase_client:
+                return []
+            try:
+                response = supabase_client.table("appointments")\
+                    .select("appointment_time")\
+                    .eq("doctor_id", doctor_id)\
+                    .eq("appointment_date", date_str)\
+                    .neq("status", "cancelled")\
+                    .execute()
+                for row in response.data:
+                    time_raw = row["appointment_time"]
+                    time_formatted = ":".join(time_raw.split(":")[:2])
+                    slot_counts[time_formatted] = slot_counts.get(time_formatted, 0) + 1
+            except Exception as e:
+                print(f"Error fetching doctor booked slots: {e}")
+                return []
+
+        # แพทย์ 1 ท่าน จองได้เพียง 1 คิวต่อสล็อตเวลา
+        booked = []
+        for time_str, count in slot_counts.items():
+            if count >= 1:
+                booked.append(time_str)
+        return booked
+
+    # หากเลือก "ไม่ระบุแพทย์"
+    else:
+        dept_settings = get_settings(dept)
+        all_slots = dept_settings.get("time_slots", ["08:30", "09:00", "09:30", "10:00", "13:30", "14:00", "14:30", "15:30", "16:00"])
+        
+        # ดึงนัดหมายทั้งหมดในวันที่นี้เพื่อตรวจสอบสถานะคิวของแพทย์แต่ละท่าน
+        booked_by_doctor = {}
+        if is_demo:
+            appointments = st.session_state.mock_db.get("appointments", [])
+            for app in appointments:
+                if app.get("department") == dept and app.get("appointment_date") == date_str and app.get("status") != "cancelled":
+                    d_id = app.get("doctor_id")
+                    if d_id:
+                        t = app.get("appointment_time")
+                        t_formatted = ":".join(t.split(":")[:2])
+                        if d_id not in booked_by_doctor:
+                            booked_by_doctor[d_id] = set()
+                        booked_by_doctor[d_id].add(t_formatted)
+        else:
+            if not supabase_client:
+                return all_slots
+            try:
+                response = supabase_client.table("appointments")\
+                    .select("appointment_time, doctor_id")\
+                    .eq("department", dept)\
+                    .eq("appointment_date", date_str)\
+                    .neq("status", "cancelled")\
+                    .execute()
+                for row in response.data:
+                    d_id = row.get("doctor_id")
+                    if d_id:
+                        time_raw = row["appointment_time"]
+                        time_formatted = ":".join(time_raw.split(":")[:2])
+                        if d_id not in booked_by_doctor:
+                            booked_by_doctor[d_id] = set()
+                        booked_by_doctor[d_id].add(time_formatted)
+            except Exception as e:
+                print(f"Error fetching all booked slots: {e}")
+                return all_slots
+
+        # ค้นหารหัสไอดีบริการที่เลือกเพื่อตรวจสอบการให้บริการของแพทย์
+        services_in_dept = fetch_services(dept)
+        selected_service_id = None
+        if selected_service:
+            for s in services_in_dept:
+                if s.get("title") == selected_service:
+                    selected_service_id = s.get("id")
+                    break
+
+        # สล็อตเวลาจะถือว่า "เต็ม" ก็ต่อเมื่อ ไม่มีแพทย์ท่านใดเลยที่ว่างและสามารถให้บริการประเภทนี้ในเวลานั้นได้
+        booked = []
+        for time_str in all_slots:
+            any_doctor_available = False
+            for doc in all_dept_doctors:
+                if weekday not in doc.get("working_days", []):
+                    continue
+                if time_str not in doc.get("working_hours", []):
+                    continue
+                if selected_service_id and doc.get("services_linked"):
+                    if selected_service_id not in doc.get("services_linked"):
+                        continue
+                
+                doc_booked = booked_by_doctor.get(doc.get("id"), set())
+                if time_str in doc_booked:
+                    continue
+                
+                # พบแพทย์อย่างน้อย 1 ท่านที่ว่างและให้บริการในส่วนนี้ได้
+                any_doctor_available = True
+                break
+                
+            if not any_doctor_available:
+                booked.append(time_str)
+                
+        return booked
+
+def execute_booking(dept, user_id, name, phone, cid, service, app_date, app_time, note, doctor_id=None):
+    """ส่งข้อมูลไปบันทึกนัดหมาย พร้อมกำหนดสิทธิ์ของแพทย์ หรือจับคู่แพทย์อัตโนมัติหากไม่เจาะจง"""
+    date_str = app_date.isoformat()
+    time_str = f"{app_time}:00"
+    
+    # หากเลือก "ไม่ระบุแพทย์" ให้สุ่มจับคู่แพทย์ว่างตามตารางเวลาและบริการ
+    if not doctor_id:
+        all_dept_doctors = fetch_doctors(dept)
+        if all_dept_doctors:
+            weekday = app_date.weekday()
+            services_in_dept = fetch_services(dept)
+            selected_service_id = None
+            for s in services_in_dept:
+                if s.get("title") == service:
+                    selected_service_id = s.get("id")
+                    break
+            
+            # ดึงรายชื่อแพทย์ที่โดนจองแล้วในสล็อตเวลานี้
+            booked_doctors = set()
+            if is_demo:
+                appointments = st.session_state.mock_db.get("appointments", [])
+                for app in appointments:
+                    if app.get("appointment_date") == date_str and ":".join(app.get("appointment_time").split(":")[:2]) == app_time and app.get("status") != "cancelled":
+                        if app.get("doctor_id"):
+                            booked_doctors.add(app.get("doctor_id"))
+            else:
+                try:
+                    response = supabase_client.table("appointments")\
+                        .select("doctor_id")\
+                        .eq("department", dept)\
+                        .eq("appointment_date", date_str)\
+                        .eq("appointment_time", time_str)\
+                        .neq("status", "cancelled")\
+                        .execute()
+                    for row in response.data:
+                        if row.get("doctor_id"):
+                            booked_doctors.add(row.get("doctor_id"))
+                except Exception as e:
+                    print(f"Error querying booked doctors for auto-assign: {e}")
+
+            # สุ่มเลือกแพทย์ท่านแรกที่สามารถตรวจได้ในสล็อตเวลานี้
+            for doc in all_dept_doctors:
+                if weekday in doc.get("working_days", []) and app_time in doc.get("working_hours", []):
+                    if not selected_service_id or not doc.get("services_linked") or selected_service_id in doc.get("services_linked"):
+                        if doc.get("id") not in booked_doctors:
+                            doctor_id = doc.get("id")
+                            break
+
+    if is_demo:
+        # ดึงการตั้งค่าของแผนก
+        dept_settings = st.session_state.settings.get(dept, {})
+        slot_configs = dept_settings.get("slot_configs", [])
+        
+        # ค้นหาโควตาสล็อตกลาง
+        max_bookings = 1
+        found_slot = False
+        for cfg in slot_configs:
+            if cfg.get("time") == app_time:
+                max_bookings = cfg.get("capacity", 1)
+                found_slot = True
+                break
+        if not found_slot:
+            max_bookings = dept_settings.get("max_bookings_per_slot", 1)
+
+        # การเช็กความขัดแย้งของคิว
+        if doctor_id:
+            # ตรวจสอบแพทย์ซ้ำ (แพทย์รับได้ 1 คิวต่อรอบเวลา)
+            current_bookings = 0
+            appointments = st.session_state.mock_db.get("appointments", [])
+            for app in appointments:
+                if (app.get("doctor_id") == doctor_id or str(app.get("doctor_id")) == str(doctor_id)) and app.get("appointment_date") == date_str and ":".join(app.get("appointment_time").split(":")[:2]) == app_time and app.get("status") != "cancelled":
+                    current_bookings += 1
+            if current_bookings >= 1:
+                return False, "แพทย์ท่านนี้ถูกจองเต็มโควตาในเวลานี้แล้ว"
+        else:
+            # ตรวจสอบโควตากลางของแผนก
+            current_bookings = 0
+            appointments = st.session_state.mock_db.get("appointments", [])
+            for app in appointments:
+                if app.get("department") == dept and app.get("appointment_date") == date_str and ":".join(app.get("appointment_time").split(":")[:2]) == app_time and app.get("status") != "cancelled":
+                    current_bookings += 1
+            if current_bookings >= max_bookings:
+                return False, "ช่วงเวลานี้ถูกจองเต็มโควตาแล้ว"
+
+        if dept not in st.session_state.mock_db["time_slots"]:
+            st.session_state.mock_db["time_slots"][dept] = {}
+        if date_str not in st.session_state.mock_db["time_slots"][dept]:
+            st.session_state.mock_db["time_slots"][dept][date_str] = {}
+            
+        # บันทึกจองเวลา
+        st.session_state.mock_db["time_slots"][dept][date_str][app_time] = "booked"
+        # บันทึกนัดหมาย
+        app_id = len(st.session_state.mock_db["appointments"]) + 1
+        st.session_state.mock_db["appointments"].append({
+            "id": app_id,
+            "department": dept,
+            "user_id": user_id,
+            "name": name,
+            "phone": phone,
+            "cid": cid,
+            "service_type": service,
+            "appointment_date": date_str,
+            "appointment_time": app_time,
+            "note": note,
+            "reminder_sent": False,
+            "status": "booked",
+            "doctor_id": doctor_id
+        })
+        st.session_state.appointment_id = f"DEMO-{app_id:04d}"
+        
+        # ลองบันทึก Google Calendar ในโหมดเดโม
+        try:
+            q_num = get_queue_number(app_time)
+            cal_desc = f"รหัสอ้างอิงการจองคิว: คิวที่ {q_num} (อ้างอิง: DEMO-{app_id:04d})\nผู้รับบริการ: {name}\nเบอร์โทรศัพท์: {phone}\nอาการ/หมายเหตุ: {note}\n\nจองคิวออนไลน์ผ่านระบบ สสจ.สระแก้ว"
+            dept_title = DEPT_THEMES.get(dept, {}).get("title_thai", "บริการทั่วไป")
+            gcal_id_val = create_gcal_event(
+                dept=dept,
+                title=f"นัดหมาย{dept_title} [{name}]: {service}",
+                appointment_date=app_date,
+                appointment_time=app_time,
+                description=cal_desc,
+                location="สำนักงานสาธารณสุขจังหวัดสระแก้ว อ.เมืองสระแก้ว จ.สระแก้ว"
+            )
+            if not gcal_id_val:
+                gcal_id_val = f"MOCK-EVENT-{app_id}"
+            st.session_state.mock_db["appointments"][-1]["gcal_event_id"] = gcal_id_val
+        except Exception as e:
+            print(f"เกิดข้อผิดพลาดในการบันทึกปฏิทินเดโม: {e}")
+            
+        return True, "จองคิวสำเร็จ (โหมดสาธิต)"
+
+    if not supabase_client:
+        return False, "ไม่สามารถเชื่อมต่อฐานข้อมูลได้"
+        
+    try:
+        # เรียกใช้งาน RPC ฟังก์ชัน book_appointment ใน Supabase (เพิ่ม parameter p_doctor_id)
+        response = supabase_client.rpc(
+            "book_appointment",
+            {
+                "p_department": dept,
+                "p_user_id": user_id,
+                "p_name": name,
+                "p_phone": phone,
+                "p_cid": cid,
+                "p_service_type": service,
+                "p_appointment_date": date_str,
+                "p_appointment_time": time_str,
+                "p_note": note,
+                "p_doctor_id": int(doctor_id) if doctor_id else None
+            }
+        ).execute()
+        
+        result = response.data[0] if response.data else {"success": False, "message": "ไม่ได้รับการตอบกลับจากเซิร์ฟเวอร์"}
+        success = result.get("success", False)
+        if success:
+            try:
+                # ค้นหารหัสการนัดหมายล่าสุดที่เราเพิ่งจองเข้าไปจากฐานข้อมูล Supabase
+                app_res = supabase_client.table("appointments")\
+                    .select("id")\
+                    .eq("department", dept)\
+                    .eq("cid", cid)\
+                    .eq("appointment_date", date_str)\
+                    .eq("appointment_time", time_str)\
+                    .order("id", desc=True)\
+                    .limit(1)\
+                    .execute()
+                if app_res.data:
+                    app_id_val = app_res.data[0]["id"]
+                    st.session_state.appointment_id = app_id_val
+                    
+                    # บันทึกคิวลง Google Calendar กลางอัตโนมัติ
+                    try:
+                        q_num = get_queue_number(app_time)
+                        cal_desc = f"รหัสอ้างอิงการจองคิว: คิวที่ {q_num} (อ้างอิง: #{app_id_val})\nผู้รับบริการ: {name}\nเบอร์โทรศัพท์: {phone}\nอาการ/หมายเหตุ: {note}\n\nจองคิวออนไลน์ผ่านระบบ สสจ.สระแก้ว"
+                        dept_title = DEPT_THEMES.get(dept, {}).get("title_thai", "บริการทั่วไป")
+                        gcal_id_val = create_gcal_event(
+                            dept=dept,
+                            title=f"นัดหมาย{dept_title} [{name}]: {service}",
+                            appointment_date=app_date,
+                            appointment_time=app_time,
+                            description=cal_desc,
+                            location="สำนักงานสาธารณสุขจังหวัดสระแก้ว อ.เมืองสระแก้ว จ.สระแก้ว"
+                        )
+                        if gcal_id_val:
+                            # บันทึกรหัส Event กลับเข้าตาราง appointments
+                            supabase_client.table("appointments")\
+                                .update({"gcal_event_id": gcal_id_val})\
+                                .eq("id", int(app_id_val))\
+                                .execute()
+                    except Exception as cal_ex:
+                        print(f"เกิดข้อผิดพลาดในการบันทึกปฏิทินกลาง: {cal_ex}")
+            except Exception as query_ex:
+                print(f"เกิดข้อผิดพลาดในการดึงรหัสการนัดหมาย / บันทึกปฏิทิน: {query_ex}")
+        return success, result.get("message", "เกิดข้อผิดพลาดไม่ทราบสาเหตุ")
+    except Exception as e:
+        return False, f"เกิดข้อผิดพลาดในการบันทึก: {e}"
+
+def construct_dental_flex_payload(title, subtitle, service, app_date, app_time, name, dept, appointment_id=None, phone=None):
+    """สร้างโครงสร้าง JSON Flex Message ตามตัวอย่างใบประชาสัมพันธ์ของ สสจ.สระแก้ว"""
+    thai_date_str = format_thai_date(app_date)
+    time_str = ":".join(str(app_time).split(":")[:2])
+    q_num = get_queue_number(app_time)
+    
+    DEPT_CONFIGS = {
+        "dental": {
+            "title_en": "ทันตกรรม",
+            "bg_color": "#F3E8FF",
+            "primary": "#7B2CBF",
+            "primary_dark": "#5A2A94",
+            "icon_url": "https://img.icons8.com/color/144/tooth.png",
+            "logo_icon": "https://img.icons8.com/color/96/tooth.png",
+            "slogan": "ใส่ใจสุขภาพ เคียงข้างประชาชน 💜",
+            "note_icon": "https://img.icons8.com/color/96/appointment-reminders--v1.png",
+            "text_color": "#5A2A94",
+            "calendar_icon": "https://img.icons8.com/color/96/calendar--v1.png",
+            "clock_icon": "https://img.icons8.com/color/96/clock--v1.png",
+            "user_icon": "https://img.icons8.com/color/96/user-male-circle--v1.png"
+        },
+        "thai_traditional": {
+            "title_en": "แพทย์แผนไทย",
+            "bg_color": "#E8F5E9",
+            "primary": "#2D6A4F",
+            "primary_dark": "#1B4332",
+            "icon_url": "https://img.icons8.com/color/144/mortar-and-pestle.png",
+            "logo_icon": "https://img.icons8.com/color/96/mortar-and-pestle.png",
+            "slogan": "ใส่ใจสุขภาพ เคียงข้างประชาชน 💚",
+            "note_icon": "https://img.icons8.com/color/96/appointment-reminders--v1.png",
+            "text_color": "#1B4332",
+            "calendar_icon": "https://img.icons8.com/color/96/calendar--v1.png",
+            "clock_icon": "https://img.icons8.com/color/96/clock--v1.png",
+            "user_icon": "https://img.icons8.com/color/96/user-male-circle--v1.png"
+        },
+        "physical_therapy": {
+            "title_en": "กายภาพบำบัด",
+            "bg_color": "#E0F7FA",
+            "primary": "#0077B6",
+            "primary_dark": "#03045E",
+            "icon_url": "https://img.icons8.com/color/144/physical-therapy.png",
+            "logo_icon": "https://img.icons8.com/color/96/physical-therapy.png",
+            "slogan": "ใส่ใจสุขภาพ เคียงข้างประชาชน 💙",
+            "note_icon": "https://img.icons8.com/color/96/appointment-reminders--v1.png",
+            "text_color": "#03045E",
+            "calendar_icon": "https://img.icons8.com/color/96/calendar--v1.png",
+            "clock_icon": "https://img.icons8.com/color/96/clock--v1.png",
+            "user_icon": "https://img.icons8.com/color/96/user-male-circle--v1.png"
+        }
+    }
+    
+    cfg = DEPT_CONFIGS.get(dept, DEPT_CONFIGS["dental"])
+    
+    ref_id = ""
+    if appointment_id is not None:
+        if isinstance(appointment_id, int) or (isinstance(appointment_id, str) and appointment_id.isdigit()):
+            ref_id = f"#{appointment_id}"
+        else:
+            ref_id = str(appointment_id)
+
+    contents_list = [
+        {
+            "type": "box",
+            "layout": "horizontal",
+            "alignItems": "center",
+            "contents": [
+                {
+                    "type": "image",
+                    "url": cfg["calendar_icon"],
+                    "size": "xxs",
+                    "flex": 1
+                },
+                {
+                    "type": "text",
+                    "text": "วันที่นัด",
+                    "color": "#666666",
+                    "size": "sm",
+                    "flex": 3,
+                    "margin": "md"
+                },
+                {
+                    "type": "text",
+                    "text": thai_date_str,
+                    "weight": "bold",
+                    "size": "sm",
+                    "color": "#240046",
+                    "flex": 6,
+                    "wrap": True
+                }
+            ]
+        },
+        {
+            "type": "box",
+            "layout": "horizontal",
+            "alignItems": "center",
+            "contents": [
+                {
+                    "type": "image",
+                    "url": cfg["clock_icon"],
+                    "size": "xxs",
+                    "flex": 1
+                },
+                {
+                    "type": "text",
+                    "text": "เวลานัด",
+                    "color": "#666666",
+                    "size": "sm",
+                    "flex": 3,
+                    "margin": "md"
+                },
+                {
+                    "type": "text",
+                    "text": f"{time_str} น.",
+                    "weight": "bold",
+                    "size": "sm",
+                    "color": "#240046",
+                    "flex": 6
+                }
+            ]
+        },
+        {
+            "type": "box",
+            "layout": "horizontal",
+            "alignItems": "center",
+            "contents": [
+                {
+                    "type": "image",
+                    "url": "https://img.icons8.com/color/96/numbered-list.png",
+                    "size": "xxs",
+                    "flex": 1
+                },
+                {
+                    "type": "text",
+                    "text": "ลำดับคิว",
+                    "color": "#666666",
+                    "size": "sm",
+                    "flex": 3,
+                    "margin": "md"
+                },
+                {
+                    "type": "text",
+                    "text": f"คิวที่ {q_num}",
+                    "weight": "bold",
+                    "size": "sm",
+                    "color": cfg["primary"],
+                    "flex": 6
+                }
+            ]
+        }
+    ]
+
+    if ref_id:
+        contents_list.append({
+            "type": "box",
+            "layout": "horizontal",
+            "alignItems": "center",
+            "contents": [
+                {
+                    "type": "image",
+                    "url": "https://img.icons8.com/color/96/hash.png",
+                    "size": "xxs",
+                    "flex": 1
+                },
+                {
+                    "type": "text",
+                    "text": "รหัสอ้างอิง",
+                    "color": "#666666",
+                    "size": "sm",
+                    "flex": 3,
+                    "margin": "md"
+                },
+                {
+                    "type": "text",
+                    "text": ref_id,
+                    "weight": "bold",
+                    "size": "sm",
+                    "color": "#240046",
+                    "flex": 6
+                }
+            ]
+        })
+
+    contents_list.append({
+        "type": "box",
+        "layout": "horizontal",
+        "alignItems": "center",
+        "contents": [
+            {
+                "type": "image",
+                "url": cfg["logo_icon"],
+                "size": "xxs",
+                "flex": 1
+            },
+            {
+                "type": "text",
+                "text": "บริการ",
+                "color": "#666666",
+                "size": "sm",
+                "flex": 3,
+                "margin": "md"
+            },
+            {
+                "type": "text",
+                "text": service,
+                "weight": "bold",
+                "size": "sm",
+                "color": "#240046",
+                "flex": 6,
+                "wrap": True
+            }
+        ]
+    })
+
+    contents_list.append({
+        "type": "box",
+        "layout": "horizontal",
+        "alignItems": "center",
+        "contents": [
+            {
+                "type": "image",
+                "url": cfg["user_icon"],
+                "size": "xxs",
+                "flex": 1
+            },
+            {
+                "type": "text",
+                "text": "ชื่อผู้รับบริการ",
+                "color": "#666666",
+                "size": "sm",
+                "flex": 3,
+                "margin": "md"
+            },
+            {
+                "type": "text",
+                "text": name,
+                "weight": "bold",
+                "size": "sm",
+                "color": "#240046",
+                "flex": 6,
+                "wrap": True
+            }
+        ]
+    })
+
+    if phone:
+        contents_list.append({
+            "type": "box",
+            "layout": "horizontal",
+            "alignItems": "center",
+            "contents": [
+                {
+                    "type": "image",
+                    "url": "https://img.icons8.com/color/96/phone.png",
+                    "size": "xxs",
+                    "flex": 1
+                },
+                {
+                    "type": "text",
+                    "text": "เบอร์โทรติดต่อ",
+                    "color": "#666666",
+                    "size": "sm",
+                    "flex": 3,
+                    "margin": "md"
+                },
+                {
+                    "type": "text",
+                    "text": phone,
+                    "weight": "bold",
+                    "size": "sm",
+                    "color": "#240046",
+                    "flex": 6
+                }
+            ]
+        })
+
+    dept_title = cfg["title_en"]
+    if not dept_title.startswith("แผนก"):
+        dept_title = f"แผนก{dept_title}"
+    contents_list.append({
+        "type": "box",
+        "layout": "horizontal",
+        "alignItems": "center",
+        "contents": [
+            {
+                "type": "image",
+                "url": "https://img.icons8.com/color/96/hospital.png",
+                "size": "xxs",
+                "flex": 1
+            },
+            {
+                "type": "text",
+                "text": "สถานที่",
+                "color": "#666666",
+                "size": "sm",
+                "flex": 3,
+                "margin": "md"
+            },
+            {
+                "type": "text",
+                "text": f"{dept_title} สสจ.สระแก้ว",
+                "weight": "bold",
+                "size": "sm",
+                "color": "#240046",
+                "flex": 6,
+                "wrap": True
+            }
+        ]
+    })
+
+    return {
+        "type": "bubble",
+        "size": "mega",
+        "header": {
+            "type": "box",
+            "layout": "horizontal",
+            "backgroundColor": cfg["bg_color"],
+            "paddingAll": "20px",
+            "contents": [
+                {
+                    "type": "box",
+                    "layout": "vertical",
+                    "flex": 7,
+                    "contents": [
+                        {
+                            "type": "text",
+                            "text": title,
+                            "weight": "bold",
+                            "size": "lg",
+                            "color": cfg["primary"]
+                        },
+                        {
+                            "type": "text",
+                            "text": cfg["title_en"],
+                            "weight": "bold",
+                            "size": "xxl",
+                            "color": cfg["primary_dark"],
+                            "margin": "none"
+                        },
+                        {
+                            "type": "box",
+                            "layout": "horizontal",
+                            "backgroundColor": cfg["primary"],
+                            "cornerRadius": "15px",
+                            "paddingStart": "8px",
+                            "paddingEnd": "8px",
+                            "paddingTop": "2px",
+                            "paddingBottom": "2px",
+                            "width": "110px",
+                            "margin": "xs",
+                            "contents": [
+                                {
+                                    "type": "text",
+                                    "text": "สสจ.สระแก้ว",
+                                    "color": "#ffffff",
+                                    "size": "xs",
+                                    "weight": "bold",
+                                    "align": "center"
+                                }
+                            ]
+                        },
+                        {
+                            "type": "text",
+                            "text": cfg["slogan"],
+                            "size": "xxs",
+                            "color": cfg["primary_dark"],
+                            "margin": "xs",
+                            "weight": "bold"
+                        }
+                    ]
+                },
+                {
+                    "type": "box",
+                    "layout": "vertical",
+                    "flex": 3,
+                    "alignItems": "center",
+                    "justifyContent": "center",
+                    "contents": [
+                        {
+                            "type": "image",
+                            "url": cfg["icon_url"],
+                            "size": "full",
+                            "aspectMode": "fit"
+                        }
+                    ]
+                }
+            ]
+        },
+        "body": {
+            "type": "box",
+            "layout": "vertical",
+            "backgroundColor": "#ffffff",
+            "paddingAll": "20px",
+            "contents": [
+                {
+                    "type": "box",
+                    "layout": "vertical",
+                    "alignItems": "center",
+                    "contents": [
+                        {
+                            "type": "text",
+                            "text": subtitle,
+                            "weight": "bold",
+                            "size": "md",
+                            "color": "#240046"
+                        },
+                        {
+                            "type": "text",
+                            "text": "— อย่าลืมมาพบแพทย์ตามนัดนะคะ —",
+                            "size": "xs",
+                            "color": cfg["primary"],
+                            "margin": "xs"
+                        }
+                    ]
+                },
+                {
+                    "type": "separator",
+                    "margin": "md",
+                    "color": cfg["bg_color"]
+                },
+                {
+                    "type": "box",
+                    "layout": "vertical",
+                    "margin": "md",
+                    "spacing": "sm",
+                    "contents": contents_list
+                },
+                {
+                    "type": "box",
+                    "layout": "horizontal",
+                    "backgroundColor": cfg["bg_color"],
+                    "cornerRadius": "10px",
+                    "paddingAll": "12px",
+                    "margin": "md",
+                    "alignItems": "center",
+                    "contents": [
+                        {
+                            "type": "box",
+                            "layout": "vertical",
+                            "flex": 2,
+                            "alignItems": "center",
+                            "contents": [
+                                {
+                                    "type": "image",
+                                    "url": cfg["note_icon"],
+                                    "size": "xs"
+                                }
+                            ]
+                        },
+                        {
+                            "type": "box",
+                            "layout": "vertical",
+                            "flex": 8,
+                            "contents": [
+                                {
+                                    "type": "text",
+                                    "text": "กรุณามาก่อนเวลานัด 15 นาที",
+                                    "weight": "bold",
+                                    "size": "xs",
+                                    "color": cfg["primary"]
+                                },
+                                {
+                                    "type": "text",
+                                    "text": "หากไม่สามารถมาตามนัดได้ กรุณาแจ้งยกเลิกหรือเลื่อนนัดล่วงหน้า",
+                                    "size": "xxs",
+                                    "color": "#666666",
+                                    "wrap": True,
+                                    "margin": "xs"
+                                }
+                            ]
+                        }
+                    ]
+                },
+                {
+                    "type": "box",
+                    "layout": "vertical",
+                    "backgroundColor": cfg["primary"],
+                    "cornerRadius": "10px",
+                    "paddingAll": "10px",
+                    "margin": "md",
+                    "action": {
+                        "type": "uri",
+                        "label": "ดูรายละเอียดการนัด",
+                        "uri": f"{liff_url}?app_id={appointment_id}" if (appointment_id and liff_url != "https://line.me") else liff_url
+                    },
+                    "contents": [
+                        {
+                            "type": "text",
+                            "text": "ดูรายละเอียดการนัด   >",
+                            "color": "#ffffff",
+                            "weight": "bold",
+                            "size": "sm",
+                            "align": "center"
+                        }
+                    ]
+                }
+            ]
+        },
+        "footer": {
+            "type": "box",
+            "layout": "horizontal",
+            "backgroundColor": cfg["primary_dark"],
+            "paddingAll": "12px",
+            "spacing": "sm",
+            "contents": [
+                {
+                    "type": "box",
+                    "layout": "vertical",
+                    "flex": 5,
+                    "contents": [
+                        {
+                            "type": "text",
+                            "text": "📍 สสจ.สระแก้ว",
+                            "color": "#ffffff",
+                            "size": "xxs",
+                            "weight": "bold"
+                        },
+                        {
+                            "type": "text",
+                            "text": "อ.เมืองสระแก้ว จ.สระแก้ว",
+                            "color": cfg["bg_color"],
+                            "size": "xxs",
+                            "wrap": True
+                        }
+                    ]
+                },
+                {
+                    "type": "box",
+                    "layout": "vertical",
+                    "flex": 5,
+                    "contents": [
+                        {
+                            "type": "text",
+                            "text": "📞 037-447-059",
+                            "color": "#ffffff",
+                            "size": "xxs",
+                            "weight": "bold",
+                            "align": "end"
+                        },
+                        {
+                            "type": "text",
+                            "text": "เวลาทำการ 08.30 - 16.30 น.",
+                            "color": cfg["bg_color"],
+                            "size": "xxs",
+                            "align": "end"
+                        }
+                    ]
+                }
+            ]
+        }
+    }
+
+def send_line_flex_message(user_id, service, app_date, app_time, name, dept, appointment_id=None, phone=None):
+    """ส่ง Flex Message ยืนยันการนัดหมายผ่าน LINE"""
+    if not line_channel_access_token or "xxxxxxxx" in line_channel_access_token:
+        st.info("💡 (โครงสร้าง Webhook) ระบบพร้อมเชื่อมต่อไปยัง LINE Messaging API เพื่อส่ง Flex Message คอนเฟิร์ม")
+        return False
+        
+    url = "https://api.line.me/v2/bot/message/push"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {line_channel_access_token}"
+    }
+    
+    flex_payload = construct_dental_flex_payload(
+        title="ยืนยันการนัดหมาย",
+        subtitle="ลงทะเบียนนัดหมายเรียบร้อยแล้วค่ะ",
+        service=service,
+        app_date=app_date,
+        app_time=app_time,
+        name=name,
+        dept=dept,
+        appointment_id=appointment_id,
+        phone=phone
+    )
+    
+    payload = {
+        "to": user_id,
+        "messages": [
+            {
+                "type": "flex",
+                "altText": f"ยืนยันการนัดหมายนัดของแผนก สสจ.สระแก้ว",
+                "contents": flex_payload
+            }
+        ]
+    }
+    
+    try:
+        response = requests.post(url, headers=headers, json=payload)
+        if response.status_code != 200:
+            st.error(f"❌ ส่ง LINE Flex Message ล้มเหลว (สถานะ {response.status_code}): {response.text}")
+        return response.status_code == 200
+    except Exception as e:
+        st.error(f"เกิดข้อผิดพลาดในการส่ง LINE Flex Message: {e}")
+        return False
+
+def send_line_reminder_flex(user_id, service, app_date, app_time, name, dept, appointment_id=None, phone=None):
+    """ส่ง Flex Message แจ้งเตือนคนไข้ล่วงหน้า 1 ชั่วโมงผ่าน LINE"""
+    if not line_channel_access_token or "xxxxxxxx" in line_channel_access_token:
+        thai_date = format_thai_date(app_date)
+        print(f"📡 [MOCK FLEX REMINDER] แผนก {dept} ส่งการ์ดแจ้งเตือนหา LINE ID: {user_id} | วันที่: {thai_date} | เวลา: {app_time} | คนไข้: {name}")
+        return True
+        
+    url = "https://api.line.me/v2/bot/message/push"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {line_channel_access_token}"
+    }
+    
+    flex_payload = construct_dental_flex_payload(
+        title="แจ้งเตือนนัด",
+        subtitle="ถึงเวลานัดของคุณแล้วค่ะ",
+        service=service,
+        app_date=app_date,
+        app_time=app_time,
+        name=name,
+        dept=dept,
+        appointment_id=appointment_id,
+        phone=phone
+    )
+    
+    payload = {
+        "to": user_id,
+        "messages": [
+            {
+                "type": "flex",
+                "altText": f"แจ้งเตือนนัดนัดของแผนก สสจ.สระแก้ว",
+                "contents": flex_payload
+            }
+        ]
+    }
+    
+    try:
+        response = requests.post(url, headers=headers, json=payload)
+        if response.status_code != 200:
+            print(f"เกิดข้อผิดพลาดในการส่ง LINE Flex Message แจ้งเตือน (สถานะ {response.status_code}): {response.text}")
+        return response.status_code == 200
+    except Exception as e:
+        print(f"เกิดข้อผิดพลาดในการส่ง LINE Flex Message แจ้งเตือน: {e}")
+        return False
+
+def fetch_services(dept=None):
+    """ดึงรายการบริการตามแผนก เรียงตาม id"""
+    if is_demo:
+        services = st.session_state.mock_db.get("services", [])
+        if dept:
+            return [s for s in services if s.get("department") == dept]
+        return services
+    if not supabase_client:
+        return []
+    try:
+        query = supabase_client.table("services").select("*")
+        if dept:
+            query = query.eq("department", dept)
+        response = query.order("id", desc=False).execute()
+        return response.data
+    except Exception as e:
+        print(f"เกิดข้อผิดพลาดในการดึงข้อมูลบริการ: {e}")
+        return []
+
+def fetch_doctors(dept=None):
+    """ดึงรายชื่อแพทย์ตามแผนก เรียงตาม id"""
+    if is_demo:
+        doctors = st.session_state.mock_db.get("doctors", [])
+        if dept:
+            return [d for d in doctors if d.get("department") == dept and d.get("status") == "active"]
+        return doctors
+    if not supabase_client:
+        return []
+    try:
+        query = supabase_client.table("doctors").select("*")
+        if dept:
+            query = query.eq("department", dept)
+        response = query.eq("status", "active").order("id", desc=False).execute()
+        return response.data
+    except Exception as e:
+        print(f"เกิดข้อผิดพลาดในการดึงข้อมูลแพทย์: {e}")
+        return []
+
+def add_doctor_db(name, dept, working_days, working_hours, services_linked):
+    """เพิ่มแพทย์คนใหม่"""
+    if is_demo:
+        doctors = st.session_state.mock_db.get("doctors", [])
+        new_id = max([d["id"] for d in doctors]) + 1 if doctors else 1
+        doctors.append({
+            "id": new_id,
+            "name": name,
+            "department": dept,
+            "working_days": working_days,
+            "working_hours": working_hours,
+            "services_linked": services_linked,
+            "status": "active"
+        })
+        return True, "เพิ่มแพทย์คนใหม่ในระบบเดโมเรียบร้อยแล้ว"
+    if not supabase_client:
+        return False, "ไม่สามารถเชื่อมต่อฐานข้อมูลได้"
+    try:
+        response = supabase_client.table("doctors").insert({
+            "name": name,
+            "department": dept,
+            "working_days": working_days,
+            "working_hours": working_hours,
+            "services_linked": services_linked,
+            "status": "active"
+        }).execute()
+        return True, "เพิ่มแพทย์คนใหม่สำเร็จ"
+    except Exception as e:
+        return False, f"เกิดข้อผิดพลาด: {e}"
+
+def update_doctor_db(doctor_id, name, dept, working_days, working_hours, services_linked):
+    """แก้ไขข้อมูลแพทย์"""
+    if is_demo:
+        doctors = st.session_state.mock_db.get("doctors", [])
+        for d in doctors:
+            if d["id"] == doctor_id:
+                d["name"] = name
+                d["department"] = dept
+                d["working_days"] = working_days
+                d["working_hours"] = working_hours
+                d["services_linked"] = services_linked
+                break
+        return True, "แก้ไขข้อมูลแพทย์สำเร็จ (เดโม)"
+    if not supabase_client:
+        return False, "ไม่สามารถเชื่อมต่อฐานข้อมูลได้"
+    try:
+        response = supabase_client.table("doctors").update({
+            "name": name,
+            "department": dept,
+            "working_days": working_days,
+            "working_hours": working_hours,
+            "services_linked": services_linked
+        }).eq("id", doctor_id).execute()
+        return True, "แก้ไขข้อมูลแพทย์สำเร็จ"
+    except Exception as e:
+        return False, f"เกิดข้อผิดพลาด: {e}"
+
+def delete_doctor_db(doctor_id):
+    """ลบแพทย์ (ซอฟต์ดีลีท โดยการเปลี่ยนสถานะเป็น inactive)"""
+    if is_demo:
+        doctors = st.session_state.mock_db.get("doctors", [])
+        for d in doctors:
+            if d["id"] == doctor_id:
+                d["status"] = "inactive"
+                break
+        return True, "ลบข้อมูลแพทย์สำเร็จ (เดโม)"
+    if not supabase_client:
+        return False, "ไม่สามารถเชื่อมต่อฐานข้อมูลได้"
+    try:
+        response = supabase_client.table("doctors").update({
+            "status": "inactive"
+        }).eq("id", doctor_id).execute()
+        return True, "ลบข้อมูลแพทย์สำเร็จ"
+    except Exception as e:
+        return False, f"เกิดข้อผิดพลาด: {e}"
+
+def add_service_db(dept, title, description, icon):
+    """เพิ่มบริการใหม่แยกตามแผนก"""
+    if is_demo:
+        services = st.session_state.mock_db.get("services", [])
+        new_id = max([s["id"] for s in services]) + 1 if services else 1
+        services.append({
+            "id": new_id,
+            "department": dept,
+            "title": title,
+            "description": description,
+            "icon": icon
+        })
+        return True, "เพิ่มบริการสำเร็จ (โหมดสาธิต)"
+    if not supabase_client:
+        return False, "ไม่สามารถเชื่อมต่อฐานข้อมูลได้"
+    try:
+        response = supabase_client.table("services")\
+            .insert({"department": dept, "title": title, "description": description, "icon": icon})\
+            .execute()
+        if response.data:
+            return True, "เพิ่มบริการใหม่สำเร็จ"
+        return False, "ไม่สามารถเพิ่มข้อมูลได้"
+    except Exception as e:
+        return False, f"เกิดข้อผิดพลาดในการเพิ่มบริการ: {e}"
+
+def update_service_db(service_id, dept, title, description, icon):
+    """แก้ไขบริการที่มีอยู่"""
+    if is_demo:
+        services = st.session_state.mock_db.get("services", [])
+        for s in services:
+            if str(s["id"]) == str(service_id):
+                s["department"] = dept
+                s["title"] = title
+                s["description"] = description
+                s["icon"] = icon
+                return True, "แก้ไขบริการสำเร็จ (โหมดสาธิต)"
+        return False, "ไม่พบบริการที่ต้องการแก้ไขในระบบจำลอง"
+    if not supabase_client:
+        return False, "ไม่สามารถเชื่อมต่อฐานข้อมูลได้"
+    try:
+        response = supabase_client.table("services")\
+            .update({"department": dept, "title": title, "description": description, "icon": icon})\
+            .eq("id", int(service_id))\
+            .execute()
+        if response.data:
+            return True, "แก้ไขข้อมูลบริการสำเร็จ"
+        return False, "ไม่สามารถแก้ไขข้อมูลได้"
+    except Exception as e:
+        return False, f"เกิดข้อผิดพลาดในการแก้ไขบริการ: {e}"
+
+def delete_service_db(service_id):
+    """ลบบริการออกจากระบบ"""
+    if is_demo:
+        services = st.session_state.mock_db.get("services", [])
+        service_to_delete = None
+        for s in services:
+            if str(s["id"]) == str(service_id):
+                service_to_delete = s
+                break
+        if service_to_delete:
+            services.remove(service_to_delete)
+            return True, "ลบบริการสำเร็จ (โหมดสาธิต)"
+        return False, "ไม่พบบริการที่ต้องการลบในระบบจำลอง"
+    if not supabase_client:
+        return False, "ไม่สามารถเชื่อมต่อฐานข้อมูลได้"
+    try:
+        response = supabase_client.table("services")\
+            .delete()\
+            .eq("id", int(service_id))\
+            .execute()
+        if response.data:
+            return True, "ลบข้อมูลบริการสำเร็จ"
+        return False, "ไม่สามารถลบข้อมูลได้"
+    except Exception as e:
+        return False, f"เกิดข้อผิดพลาดในการลบบริการ: {e}"
+
+def fetch_all_appointments():
+    """ดึงรายการนัดหมายทั้งหมด เรียงตามวันและเวลา"""
+    if is_demo:
+        return st.session_state.mock_db["appointments"]
+    if not supabase_client:
+        return []
+    try:
+        response = supabase_client.table("appointments")\
+            .select("*")\
+            .order("appointment_date", desc=False)\
+            .order("appointment_time", desc=False)\
+            .execute()
+        return response.data
+    except Exception as e:
+        st.error(f"เกิดข้อผิดพลาดในการดึงข้อมูลนัดหมาย: {e}")
+        return []
+
+def cancel_appointment_db(app_id):
+    """ยกเลิกนัดหมายและคืนสถานะสล็อตเวลา"""
+    if is_demo:
+        appointments = st.session_state.mock_db["appointments"]
+        app_to_cancel = None
+        for app in appointments:
+            if str(app["id"]) == str(app_id):
+                app_to_cancel = app
+                break
+        
+        if not app_to_cancel:
+            return False, "ไม่พบข้อมูลการนัดหมายที่เลือก"
+        
+        # ลบเหตุการณ์นัดหมายออกจาก Google Calendar
+        if app_to_cancel.get("gcal_event_id"):
+            delete_gcal_event(app_to_cancel.get("department"), app_to_cancel.get("gcal_event_id"))
+
+        # ลบนัดหมายออก
+        appointments.remove(app_to_cancel)
+        
+        # คืนค่าสล็อตเวลาตามแผนกที่ลงทะเบียน
+        dept = app_to_cancel.get("department", "dental")
+        date_str = app_to_cancel["appointment_date"]
+        time_str = app_to_cancel["appointment_time"]
+        if dept in st.session_state.mock_db["time_slots"]:
+            if date_str in st.session_state.mock_db["time_slots"][dept]:
+                if time_str in st.session_state.mock_db["time_slots"][dept][date_str]:
+                    st.session_state.mock_db["time_slots"][dept][date_str].pop(time_str, None)
+                
+        return True, "ยกเลิกคิวนัดหมาย (โหมดสาธิต) สำเร็จ"
+    
+    if not supabase_client:
+        return False, "ไม่สามารถเชื่อมต่อฐานข้อมูลได้"
+        
+    try:
+        # ค้นหาข้อมูลการนัดหมายก่อนลบเพื่อดึง gcal_event_id
+        app_data = fetch_appointment_by_id(app_id)
+        if app_data and app_data.get("gcal_event_id"):
+            delete_gcal_event(app_data.get("department"), app_data.get("gcal_event_id"))
+
+        response = supabase_client.rpc("cancel_appointment", {"p_appointment_id": int(app_id)}).execute()
+        result = response.data[0] if response.data else {"success": False, "message": "ไม่มีการตอบสนองจากระบบ"}
+        return result.get("success", False), result.get("message", "เกิดข้อผิดพลาด")
+    except Exception as e:
+        return False, f"เกิดข้อผิดพลาดในการยกเลิก: {e}"
+
+def complete_appointment_db(app_id):
+    """เปลี่ยนสถานะการนัดหมายเป็นเสร็จสิ้น (จบกระบวนการ)"""
+    if is_demo:
+        appointments = st.session_state.mock_db["appointments"]
+        cleaned_id = str(app_id).replace("DEMO-", "")
+        for app in appointments:
+            if str(app.get("id")) == cleaned_id:
+                app["status"] = "completed"
+                return True, "บันทึกเสร็จสิ้นการบริการ (โหมดสาธิต) สำเร็จ"
+        return False, "ไม่พบข้อมูลการนัดหมายที่เลือก"
+        
+    if not supabase_client:
+        return False, "ไม่สามารถเชื่อมต่อฐานข้อมูลได้"
+        
+    try:
+        response = supabase_client.table("appointments")\
+            .update({"status": "completed"})\
+            .eq("id", int(app_id))\
+            .execute()
+        if response.data:
+            return True, "บันทึกเสร็จสิ้นการบริการสำเร็จ"
+        return False, "ไม่สามารถอัปเดตข้อมูลได้"
+    except Exception as e:
+        return False, f"เกิดข้อผิดพลาดในการอัปเดตสถานะ: {e}"
+
+def send_line_push_message(user_id, message_text):
+    """ส่ง Push Message คอนเฟิร์มหรือแจ้งเตือนไปยังผู้ใช้รายบุคคล"""
+    if not line_channel_access_token or "xxxxxxxx" in line_channel_access_token:
+        # บันทึก Log ในหน้าจอ Console
+        print(f"📡 [MOCK PUSH] ส่งข้อความเตือนไปยัง LINE ID: {user_id} -> {message_text}")
+        return True
+        
+    url = "https://api.line.me/v2/bot/message/push"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {line_channel_access_token}"
+    }
+    payload = {
+        "to": user_id,
+        "messages": [
+            {
+                "type": "text",
+                "text": message_text
+            }
+        ]
+    }
+    try:
+        response = requests.post(url, headers=headers, json=payload)
+        return response.status_code == 200
+    except Exception as e:
+        print(f"เกิดข้อผิดพลาดในการส่ง LINE Push Message: {e}")
+        return False
+
+def run_reminder_check():
+    """ตรวจสอบนัดหมายในอีก 1 ชั่วโมงข้างหน้า และส่ง LINE แจ้งเตือน"""
+    now = datetime.datetime.now()
+    today_str = now.date().isoformat()
+    
+    # คำนวณช่วงเวลาที่ต้องการเตือน (เริ่มจองระหว่าง 50 ถึง 70 นาทีข้างหน้า)
+    time_min = (now + datetime.timedelta(minutes=50)).time()
+    time_max = (now + datetime.timedelta(minutes=70)).time()
+    
+    if is_demo:
+        # ตรวจสอบกับ Mock DB ใน st.session_state (รันปลอดภัยบน Main Thread เท่านั้น)
+        appointments = st.session_state.mock_db.get("appointments", [])
+        for app in appointments:
+            if app.get("reminder_sent") == False and app.get("appointment_date") == today_str:
+                try:
+                    app_time_obj = datetime.datetime.strptime(app["appointment_time"], "%H:%M").time()
+                    if time_min <= app_time_obj <= time_max:
+                        user_id = app.get("user_id", "")
+                        if user_id and user_id != "NON_LINE_USER":
+                            demo_app_id = f"DEMO-{app.get('id', 0):04d}"
+                            send_line_reminder_flex(
+                                user_id=user_id,
+                                service=app["service_type"],
+                                app_date=app["appointment_date"],
+                                app_time=app["appointment_time"],
+                                name=app["name"],
+                                dept=app.get("department", "dental"),
+                                appointment_id=demo_app_id,
+                                phone=app.get("phone")
+                            )
+                            app["reminder_sent"] = True
+                            st.sidebar.toast(f"🔔 แจ้งเตือนคิวล่วงหน้า: ส่งการ์ด LINE เตือนคุณ {app['name']} แล้ว")
+                except Exception as e:
+                    print(f"เกิดข้อผิดพลาดในการแปลงเวลาโหมดเดโม: {e}")
+    else:
+        # ตรวจสอบกับฐานข้อมูล Supabase จริง (รันได้บนทุก Thread)
+        if not supabase_client:
+            return
+        try:
+            response = supabase_client.table("appointments")\
+                .select("*")\
+                .eq("appointment_date", today_str)\
+                .eq("reminder_sent", False)\
+                .execute()
+                
+            for row in response.data:
+                app_time_str = row["appointment_time"]
+                try:
+                    # แปลง "HH:MM:SS" หรือ "HH:MM"
+                    app_time_obj = datetime.datetime.strptime(":".join(app_time_str.split(":")[:2]), "%H:%M").time()
+                    
+                    if time_min <= app_time_obj <= time_max:
+                        user_id = row.get("user_id", "")
+                        if user_id and user_id != "NON_LINE_USER":
+                            if send_line_reminder_flex(
+                                user_id=user_id,
+                                service=row["service_type"],
+                                app_date=row["appointment_date"],
+                                app_time=row["appointment_time"],
+                                name=row["name"],
+                                dept=row.get("department", "dental"),
+                                appointment_id=row.get("id"),
+                                phone=row.get("phone")
+                            ):
+                                # อัปเดตสถานะใน Supabase เพื่อไม่ให้ส่งเตือนซ้ำ
+                                supabase_client.table("appointments")\
+                                    .update({"reminder_sent": True})\
+                                    .eq("id", row["id"])\
+                                    .execute()
+                except Exception as ex:
+                    print(f"เกิดข้อผิดพลาดในการตรวจสอบนัดหมายรายคิว: {ex}")
+        except Exception as e:
+            print(f"เกิดข้อผิดพลาดในการตรวจสอบคิวแจ้งเตือน Supabase: {e}")
+
+@st.cache_resource
+def start_production_reminder_worker():
+    """เปิดการทำ Background Thread ทำงานเบื้องหลังดึงข้อมูล Supabase ทุกๆ 5 นาที (เฉพาะการรันจริงไม่ใช่เดโม)"""
+    if is_demo:
+        return "Demo Mode - Checked via Main Thread"
+        
+    import threading
+    import time as pytime
+    
+    def worker():
+        while True:
+            try:
+                run_reminder_check()
+            except Exception as e:
+                print(f"เกิดข้อผิดพลาดในเธรดแจ้งเตือนเบื้องหลัง: {e}")
+            pytime.sleep(300) # หน่วงเวลาสแกนใหม่ทุก 5 นาที
+            
+    thread = threading.Thread(target=worker, daemon=True)
+    thread.start()
+    return "Production Background Worker Started"
+
+# เรียกใช้เธรดเบื้องหลังในฝั่งโปรดักชัน
+start_production_reminder_worker()
+
+import time as main_time
+# ตัวแปรควบคุมการรันแจ้งเตือนบนหน้าเว็บ
+if "last_reminder_check" not in st.session_state:
+    st.session_state.last_reminder_check = 0.0
+
+# รันระบบสแกนคิวบนหน้าหลัก โดยจำกัดการตรวจสอบไม่บ่อยเกินครั้งละ 60 วินาที เพื่อถนอมการยิงคิว API
+current_time_epoch = main_time.time()
+if current_time_epoch - st.session_state.last_reminder_check > 60:
+    st.session_state.last_reminder_check = current_time_epoch
+    run_reminder_check()
+
+# ----------------- Sidebar (LINE Profile & Config info) -----------------
+with st.sidebar:
+    st.image("moph_logo.png", width=80)
+    st.markdown("### สำนักงานสาธารณสุขจังหวัดสระแก้ว")
+    
+    dept_sidebar_titles = {
+        "": "🏥 **ระบบลงทะเบียนนัดหมาย**",
+        "dental": "🦷 **แผนกทันตกรรม**",
+        "thai_traditional": "🌿 **แผนกแพทย์แผนไทย**",
+        "physical_therapy": "♿ **แผนกกายภาพบำบัด**"
+    }
+    sidebar_title = dept_sidebar_titles.get(st.session_state.selected_dept, "🏥 **ระบบลงทะเบียนนัดหมาย**")
+    st.markdown(sidebar_title)
+    st.divider()
+    
+    # สลับระบบงาน
+    app_mode = st.selectbox(
+        "เลือกระบบงาน (Role):",
+        ["ผู้รับบริการ (LINE LIFF)", "เจ้าหน้าที่ (Back-Office & Dashboard)"]
+    )
+    st.divider()
+    
+    # LINE Profile Section
+    if st.session_state.line_user_id:
+        st.success("เชื่อมต่อ LINE สำเร็จ ✅")
+        if st.session_state.line_picture_url:
+            st.image(st.session_state.line_picture_url, width=70)
+        st.write(f"**ชื่อ LINE:** {st.session_state.line_display_name}")
+        st.caption(f"User ID: `{st.session_state.line_user_id[:10]}...`")
+        
+        if st.button("ล้างสิทธิ์เชื่อมต่อ 🗑️", use_container_width=True):
+            st.session_state.line_user_id = ""
+            st.session_state.line_display_name = ""
+            st.session_state.line_picture_url = ""
+            st.rerun()
+    else:
+        st.warning("⚠️ ยังไม่เชื่อมต่อ LINE")
+        st.info("💡 กรุณาเปิดใช้งานแอปพลิเคชันนี้ผ่านแอป LINE เพื่อเข้าสู่ระบบและจองนัดหมายด้วยบัญชี LINE ของท่าน")
+        
+    st.divider()
+    
+    # System Status / Mode
+    if is_demo:
+        st.warning("🟢 โหมดสาธิต (Demo Mode)")
+        st.caption("ระบบเก็บข้อมูลลงบนหน่วยความจำชั่วคราวและจำลองสล็อตเวลา คอนฟิก Supabase ใน Streamlit Secrets เพื่อใช้งานจริง")
+    else:
+        st.success("🔌 เชื่อมต่อ Supabase แล้ว")
+        st.caption(f"URL: `{supabase_url[:25]}...`")
+
+# ----------------- LINE LIFF Login Redirector integration -----------------
+def render_liff_login(liff_id):
+    # เข้าสู่ระบบผ่านหน้าล็อกอินหลัก (redirect.html) ที่ตั้งไว้ใน LINE Developers Console
+    # ระบบจะส่งค่า userId, displayName กลับมาทาง URL query parameters อัตโนมัติ
+    pass
+
+# ----------------- PATIENT PORTAL (LINE LIFF) -----------------
+if app_mode == "ผู้รับบริการ (LINE LIFF)":
+    # 1. LINE LIFF Login Integration
+    render_liff_login(liff_id)
+    
+    # ตรวจสอบการเรียกดูรายละเอียดการนัดหมาย
+    view_app_id = st.query_params.get("app_id")
+    if view_app_id:
+        render_appointment_details_view(view_app_id)
+        st.stop()
+    
+    # 2. Main title & banner
+    st.markdown(f"""
+    <div style="text-align: center; margin-bottom: 2.5rem; background: {theme['gradient_bg']}; padding: 2rem; border-radius: 20px; box-shadow: 0 4px 15px rgba(0,0,0,0.05);">
+        <img src="{theme['banner_img']}" width="90" style="margin-bottom: 1rem;">
+        <h1 class="main-title" style="margin: 0;">สำนักงานสาธารณสุขจังหวัดสระแก้ว</h1>
+        <p class="sub-title" style="margin: 0.5rem 0 0 0;">ระบบลงทะเบียนนัดหมายออนไลน์ - แผนก{theme['title_thai'] or 'บริการทั่วไป'}</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # 3. Step Indicator
+    step1_class = "active" if st.session_state.step == 1 else ("completed" if st.session_state.step > 1 else "")
+    step2_class = "active" if st.session_state.step == 2 else ("completed" if st.session_state.step > 2 else "")
+    step3_class = "active" if st.session_state.step == 3 else ("completed" if st.session_state.step > 3 else "")
+    step4_class = "active" if st.session_state.step == 4 else ""
+    
+    st.markdown(f"""
+    <div class="step-container">
+        <div class="step-item {step1_class}">
+            <div class="step-icon">1</div>
+            <div class="step-label">เลือกบริการ</div>
+        </div>
+        <div class="step-item {step2_class}">
+            <div class="step-icon">2</div>
+            <div class="step-label">เลือกวัน/เวลา</div>
+        </div>
+        <div class="step-item {step3_class}">
+            <div class="step-icon">3</div>
+            <div class="step-label">กรอกข้อมูล</div>
+        </div>
+        <div class="step-item {step4_class}">
+            <div class="step-icon">4</div>
+            <div class="step-label">เสร็จสิ้น</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # --- STEP 1: เลือกแผนก แพทย์ และบริการ ---
+    if st.session_state.step == 1:
+        # หากยังไม่เลือกแผนก ให้เลือกแผนกก่อน
+        if not st.session_state.selected_dept:
+            depts_list = fetch_all_departments()
+            if not depts_list:
+                st.info("ℹ️ ขออภัยด้วยค่ะ ปัจจุบันยังไม่มีแผนกที่เปิดให้บริการออนไลน์ในระบบ")
+            else:
+                cols_per_row = 3
+                for row_idx in range(0, len(depts_list), cols_per_row):
+                    cols = st.columns(cols_per_row)
+                    for col_idx, dept_item in enumerate(depts_list[row_idx:row_idx+cols_per_row]):
+                        col = cols[col_idx]
+                        d_key = dept_item["key"]
+                        d_name = dept_item["display_name"]
+                        d_color = dept_item["theme_color"]
+                        d_img = dept_item["banner_img"]
+                        
+                        dept_services = fetch_services(d_key)
+                        services_preview = ", ".join([s.get("title", "") for s in dept_services[:4]])
+                        if not services_preview:
+                            services_preview = "จองคิวรับบริการทั่วไป"
+                            
+                        col.markdown(f"""
+                        <div class="service-card" style="text-align: center; border-left: 5px solid {d_color}; min-height: 180px; display: flex; flex-direction: column; justify-content: space-between;">
+                            <div>
+                                <img src="{d_img}" width="60" style="margin: 10px auto;"><br>
+                                <h4 style="margin-top: 10px; color: #240046; font-size: 1.1rem; font-weight: 700;">{d_name}</h4>
+                                <p style="font-size: 0.8rem; color: #6C757D; line-height: 1.2;">{services_preview}</p>
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                        if col.button(f"เลือก {d_name} 👉", use_container_width=True, key=f"btn_select_{d_key}"):
+                            st.session_state.selected_dept = d_key
+                            st.session_state.selected_doctor_id = None # Reset selected doctor for new dept
+                            st.rerun()
+        else:
+            doctors_list = fetch_doctors(st.session_state.selected_dept)
+            
+            # 1. ขั้นตอนย่อย: เลือกแพทย์ (หากมีรายชื่อแพทย์ และยังไม่ได้ตัดสินใจเลือกแพทย์)
+            if doctors_list and getattr(st.session_state, "selected_doctor_id", None) is None:
+                if st.button("⬅️ เปลี่ยนแผนกบริการ"):
+                    st.session_state.selected_dept = ""
+                    st.session_state.selected_service = ""
+                    st.session_state.selected_doctor_id = None
+                    st.rerun()
+                    
+                st.write(f"### 🩺 ขั้นตอนที่ 1.1: เลือกแพทย์ผู้ให้บริการ ({theme['title_thai']})")
+                
+                # ปุ่มเลือก "ไม่ระบุแพทย์"
+                st.markdown(f"""
+                <div class="service-card" style="border-left: 5px solid #6C757D; min-height: 90px; display: flex; flex-direction: column; justify-content: center;">
+                    <div style="display: flex; align-items: center; gap: 15px;">
+                        <span style="font-size: 2.2rem;">🏥</span>
+                        <div style="flex-grow: 1;">
+                            <h4 style="margin: 0; color: #333; font-weight: 700;">ไม่ระบุแพทย์</h4>
+                            <p style="margin: 3px 0 0 0; font-size: 0.82rem; color: #6C757D;">รับการตรวจรักษาโดยแพทย์ท่านใดก็ได้ตามตารางเวรปฏิบัติงาน</p>
+                        </div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+                if st.button("👉 เลือกแบบไม่ระบุแพทย์ (ทั่วไป)", use_container_width=True, key="select_doc_anyone"):
+                    st.session_state.selected_doctor_id = ""
+                    st.rerun()
+                
+                st.write("")
+                
+                # แสดงรายชื่อแพทย์แต่ละคน
+                for doc in doctors_list:
+                    thai_days = ["จ.", "อ.", "พ.", "พฤ.", "ศ.", "ส.", "อา."]
+                    days_worked = ", ".join([thai_days[d] for d in doc.get("working_days", [])])
+                    
+                    st.markdown(f"""
+                    <div class="service-card" style="border-left: 5px solid {theme['primary']}; min-height: 90px; display: flex; flex-direction: column; justify-content: center;">
+                        <div style="display: flex; align-items: center; gap: 15px;">
+                            <span style="font-size: 2.2rem;">🩺</span>
+                            <div style="flex-grow: 1;">
+                                <h4 style="margin: 0; color: {theme['text_dark']}; font-weight: 700;">{doc['name']}</h4>
+                                <p style="margin: 3px 0 0 0; font-size: 0.82rem; color: #4B5563;"><b>วันออกตรวจ:</b> {days_worked}</p>
+                                <p style="margin: 1px 0 0 0; font-size: 0.8rem; color: #6B7280;"><b>เวลาปฏิบัติงาน:</b> {min(doc.get("working_hours", []))} - {max(doc.get("working_hours", []))} น.</p>
+                            </div>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    if st.button(f"👉 เลือก {doc['name']}", use_container_width=True, key=f"select_doc_{doc['id']}"):
+                        st.session_state.selected_doctor_id = doc["id"]
+                        st.rerun()
+            else:
+                # 2. ขั้นตอนย่อย: เลือกบริการรักษา
+                if getattr(st.session_state, "selected_doctor_id", None) is None:
+                    st.session_state.selected_doctor_id = ""
+                
+                col_back_doc, col_title = st.columns([1, 4])
+                with col_back_doc:
+                    if doctors_list:
+                        if st.button("⬅️ ย้อนกลับ", key="back_to_select_doc"):
+                            st.session_state.selected_doctor_id = None
+                            st.session_state.selected_service = ""
+                            st.rerun()
+                    else:
+                        if st.button("⬅️ ย้อนกลับ", key="back_to_select_dept"):
+                            st.session_state.selected_dept = ""
+                            st.session_state.selected_service = ""
+                            st.rerun()
+                
+                st.write(f"### 📌 ขั้นตอนที่ 1.2: เลือกประเภทบริการ ({theme['title_thai']})")
+                
+                if st.session_state.selected_doctor_id == "":
+                    st.info("🩺 **แพทย์ผู้ให้บริการ:** ไม่ระบุแพทย์ (แพทย์ท่านใดก็ได้)")
+                else:
+                    doc_obj = [d for d in doctors_list if d["id"] == st.session_state.selected_doctor_id][0]
+                    st.info(f"🩺 **แพทย์ผู้ให้บริการ:** {doc_obj['name']}")
+                
+                # ดึงรายการบริการของแผนกนี้
+                services_list = fetch_services(st.session_state.selected_dept)
+                
+                # กรองบริการตามแพทย์ที่เลือก
+                if st.session_state.selected_doctor_id != "":
+                    doc_obj = [d for d in doctors_list if d["id"] == st.session_state.selected_doctor_id][0]
+                    linked_services = doc_obj.get("services_linked", [])
+                    if linked_services:
+                        services_list = [s for s in services_list if s["id"] in linked_services]
+                
+                if not services_list:
+                    st.warning("⚠️ ขออภัยด้วยค่ะ ไม่พบข้อมูลบริการที่เปิดรักษาสำหรับแพทย์หรือแผนกนี้")
+                else:
+                    for service in services_list:
+                        icon_str = service.get("icon", "😀")
+                        title_str = service.get("title", "")
+                        desc_str = service.get("description", "")
+                        
+                        st.markdown(f"""
+                        <div class="service-card" style="border-left: 5px solid {theme['primary']};">
+                            <div style="display: flex; align-items: center; gap: 15px;">
+                                <span style="font-size: 2.2rem;">{icon_str}</span>
+                                <div style="flex-grow: 1;">
+                                    <h4 style="margin: 0; color: {theme['text_dark']}; font-weight: 700;">{title_str}</h4>
+                                    <p style="margin: 5px 0 0 0; font-size: 0.88rem; color: #6C757D;">{desc_str}</p>
+                                </div>
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                        
+                        if st.button(f"เลือกบริการ: {title_str}", key=f"select_srv_{service['id']}", use_container_width=True):
+                            st.session_state.selected_service = title_str
+                            st.session_state.step = 2
+                            st.session_state.selected_time = ""
+                            st.rerun()
+    
+    elif st.session_state.step == 2:
+        st.write(f"### 📌 ขั้นตอนที่ 2: เลือกวันและเวลาที่สะดวก")
+        
+        # ค้นหาแพทย์เพื่อดึงข้อมูลตารางงาน
+        doctors_list = fetch_doctors(st.session_state.selected_dept)
+        selected_doc = None
+        if st.session_state.selected_doctor_id != "":
+            selected_doc = [d for d in doctors_list if d["id"] == st.session_state.selected_doctor_id][0]
+            
+        dept_settings = get_settings(st.session_state.selected_dept)
+        booking_range = dept_settings.get("booking_range_days", 30)
+        closed_dates = dept_settings.get("closed_dates", [])
+        
+        # นำเข้าตารางเวลาและวันทำงานแยกตามแพทย์หรือส่วนกลาง
+        if selected_doc:
+            working_days = selected_doc.get("working_days", [0, 1, 2, 3, 4])
+            all_slots = selected_doc.get("working_hours", [])
+            doc_name_str = selected_doc["name"]
+        else:
+            working_days = dept_settings.get("working_days", [0, 1, 2, 3, 4])
+            all_slots = dept_settings.get("time_slots", ["08:30", "09:00", "09:30", "10:00", "13:30", "14:00", "14:30", "15:30", "16:00"])
+            doc_name_str = "ไม่ระบุแพทย์ (สุ่มแพทย์เวร)"
+            
+        st.info(f"**บริการที่เลือก:** {st.session_state.selected_service} | **แพทย์:** {doc_name_str}")
+        
+        # 1. เลือกวัน
+        min_date = datetime.date.today()
+        max_date = min_date + datetime.timedelta(days=booking_range)
+        
+        thai_days_name = ["จันทร์", "อังคาร", "พุธ", "พฤหัสบดี", "ศุกร์", "เสาร์", "อาทิตย์"]
+        working_days_text = ", ".join([thai_days_name[d] for d in working_days])
+        
+        selected_date = st.date_input(
+            f"เลือกวันที่นัดหมาย (เปิดออกตรวจวัน: {working_days_text}):", 
+            min_value=min_date, 
+            max_value=max_date, 
+            value=st.session_state.selected_date
+        )
+        
+        # ตรวจสอบวันหยุด
+        selected_weekday = selected_date.weekday()
+        selected_date_str = selected_date.isoformat()
+        
+        if selected_weekday not in working_days:
+            st.warning(f"⚠️ ขออภัยด้วยค่ะ แพทย์ปิดออกตรวจในวัน{thai_days_name[selected_weekday]} (เปิดบริการวัน: {working_days_text})")
+        elif selected_date_str in closed_dates:
+            st.warning(f"⚠️ ขออภัยด้วยค่ะ วันที่ {format_thai_date(selected_date)} เป็นวันหยุดราชการ/วันงดออกตรวจ กรุณาเลือกวันอื่น")
+        else:
+            st.session_state.selected_date = selected_date
+            
+            # ดึงช่วงเวลาที่ถูกจองไปแล้ว
+            booked_slots = get_booked_slots(
+                selected_date, 
+                st.session_state.selected_dept, 
+                st.session_state.selected_service,
+                doctor_id=st.session_state.selected_doctor_id if st.session_state.selected_doctor_id != "" else None
+            )
+            
+            st.write("#### ⏰ ช่วงเวลาออกตรวจที่ว่าง")
+            
+            if not all_slots:
+                st.warning("⚠️ แพทย์ท่านนี้ไม่มีตารางปฏิบัติงานในวันนี้")
+            else:
+                for i in range(0, len(all_slots), 3):
+                    cols = st.columns(3)
+                    for idx, slot_time in enumerate(all_slots[i:i+3]):
+                        col = cols[idx]
+                        is_booked = slot_time in booked_slots
+                        
+                        if is_booked:
+                            col.button(f"❌ {slot_time} (เต็ม)", key=f"slot_{slot_time}", disabled=True, use_container_width=True)
+                        else:
+                            is_selected = st.session_state.selected_time == slot_time
+                            btn_label = f"🟣 {slot_time}" if is_selected else f"⚪ {slot_time}"
+                            
+                            if col.button(btn_label, key=f"slot_{slot_time}", use_container_width=True):
+                                st.session_state.selected_time = slot_time
+                                st.rerun()
+     
+            st.divider()
+            col_back, col_next = st.columns(2)
+            with col_back:
+                if st.button("⬅️ ย้อนกลับ", use_container_width=True):
+                    st.session_state.step = 1
+                    st.rerun()
+                    
+            with col_next:
+                if st.session_state.selected_time:
+                    st.success(f"คุณเลือก: วันที่ {selected_date.strftime('%d/%m/%Y')} เวลา {st.session_state.selected_time} น.")
+                    if st.button("ถัดไป ➡️", use_container_width=True):
+                        st.session_state.step = 3
+                        st.rerun()
+                else:
+                    st.button("กรุณาเลือกเวลานัดหมาย", disabled=True, use_container_width=True)
+     
+    # --- STEP 3: กรอกข้อมูลผู้รับบริการ (Enter Info) ---
+    elif st.session_state.step == 3:
+        st.write("### 📌 ขั้นตอนที่ 3: กรอกข้อมูลผู้รับบริการ")
+        
+        # ค้นหาแพทย์เพื่อแสดงชื่อสรุปคิวจอง
+        doctors_list = fetch_doctors(st.session_state.selected_dept)
+        doc_display_name = "ไม่ระบุแพทย์ (แพทย์ท่านใดก็ได้)"
+        if st.session_state.selected_doctor_id != "":
+            selected_doc = [d for d in doctors_list if d["id"] == st.session_state.selected_doctor_id]
+            if selected_doc:
+                doc_display_name = selected_doc[0]["name"]
+
+        st.markdown(f"""
+        <div style="background-color: white; padding: 1rem; border-radius: 10px; border-left: 4px solid {theme['primary']}; margin-bottom: 1.5rem;">
+            <b>รายละเอียดการจอง:</b> {st.session_state.selected_service}<br>
+            <b>แพทย์ผู้ดูแล:</b> {doc_display_name}<br>
+            <b>วันที่นัดหมาย:</b> {st.session_state.selected_date.strftime('%d/%m/%Y')} เวลา {st.session_state.selected_time} น.
+        </div>
+        """, unsafe_allow_html=True)
+        
+        if not st.session_state.line_user_id:
+            st.warning("⚠️ แนะนำให้เชื่อมต่อกับ LINE ในฝั่งเมนูด้านซ้าย เพื่อให้ได้รับข้อความแจ้งเตือนคอนเฟิร์มนัดหมายกลับทางแชท")
+            
+        with st.form("info_form"):
+            name = st.text_input("ชื่อ - นามสกุล:", value=st.session_state.user_name, placeholder="นางสาว ใจดี รักสุขภาพ")
+            phone = st.text_input("เบอร์โทรศัพท์มือถือ (10 หลัก):", value=st.session_state.user_phone, max_chars=10, placeholder="0812345678")
+            cid = st.text_input("เลขบัตรประจำตัวประชาชน (13 หลัก):", value=st.session_state.user_cid, max_chars=13, placeholder="1234567890123")
+            note = st.text_area("อาการเบื้องต้น / ความต้องการอื่นๆ เพิ่มเติม (ถ้ามี):", value=st.session_state.user_note, placeholder="มีอาการปวดข้อ / ต้องการพอกสมุนไพร...")
+            
+            st.caption("ℹ️ ระบบจะใช้เลขบัตรประจำตัวประชาชนในการค้นหาประวัติการรักษาเดิมที่ สสจ.สระแก้ว")
+            
+            submitted = st.form_submit_button(f"🏥 ยืนยันข้อมูลการนัดหมาย{theme['title_thai']}", use_container_width=True)
+            
+            if submitted:
+                st.session_state.user_name = name
+                st.session_state.user_phone = phone
+                st.session_state.user_cid = cid
+                st.session_state.user_note = note
+                
+                errors = []
+                if not name.strip():
+                    errors.append("กรุณากรอก ชื่อ-นามสกุล")
+                if not phone.strip() or len(phone.strip()) != 10 or not phone.isdigit():
+                    errors.append("กรุณากรอก เบอร์โทรศัพท์ ให้ครบ 10 หลัก (เฉพาะตัวเลข)")
+                if not validate_thai_cid(cid):
+                    errors.append("เลขบัตรประจำตัวประชาชนไม่ถูกต้อง กรุณากรอกใหม่ให้ครบ 13 หลักตามรูปแบบมาตรฐาน")
+                    
+                if errors:
+                    for err in errors:
+                        st.error(err)
+                else:
+                    final_line_id = st.session_state.line_user_id if st.session_state.line_user_id else "NON_LINE_USER"
+                    
+                    with st.spinner("กำลังจองคิวและลงบันทึกในระบบ..."):
+                        success, message = execute_booking(
+                            dept=st.session_state.selected_dept,
+                            user_id=final_line_id,
+                            name=name,
+                            phone=phone,
+                            cid=cid,
+                            service=st.session_state.selected_service,
+                            app_date=st.session_state.selected_date,
+                            app_time=st.session_state.selected_time,
+                            note=note,
+                            doctor_id=st.session_state.selected_doctor_id if st.session_state.selected_doctor_id != "" else None
+                        )
+                        
+                        if success:
+                            if final_line_id != "NON_LINE_USER":
+                                send_line_flex_message(
+                                    user_id=final_line_id,
+                                    service=st.session_state.selected_service,
+                                    app_date=st.session_state.selected_date,
+                                    app_time=st.session_state.selected_time,
+                                    name=name,
+                                    dept=st.session_state.selected_dept,
+                                    appointment_id=st.session_state.appointment_id,
+                                    phone=phone
+                                )
+                            st.session_state.step = 4
+                            st.rerun()
+                        else:
+                            st.error(f"❌ จองคิวล้มเหลว: {message}")
+     
+        if st.button("⬅️ ย้อนกลับไปเลือกเวลา"):
+            st.session_state.step = 2
+            st.rerun()
+     
+    # --- STEP 4: แสดงผลสิทธิ์สำเร็จ (Success Screen) ---
+    elif st.session_state.step == 4:
+        q_num = get_queue_number(st.session_state.selected_time)
+        thai_date_str = format_thai_date(st.session_state.selected_date)
+        
+        # ป้องกันคำซ้ำซ้อน "แผนกแผนก"
+        dept_name = theme['title_thai']
+        if dept_name.startswith("แผนกแผนก"):
+            dept_name = dept_name.replace("แผนกแผนก", "แผนก", 1)
+        elif not dept_name.startswith("แผนก"):
+            dept_name = f"แผนก{dept_name}"
+            
+        st.markdown(f"""
+        <div class="success-box" style="text-align: center; padding: 1.5rem; background-color: #E8F5E9; border-radius: 12px; margin-bottom: 1.5rem;">
+            <h2 style="margin: 0; color: #1B4332;">🎉 นัดหมายสำเร็จเรียบร้อยแล้วค่ะ</h2>
+            <p style="margin-top: 0.5rem; margin-bottom: 0.2rem; font-size: 1.4rem; color: {theme['primary']};"><b>ลำดับคิวของคุณคือ: คิวที่ {q_num}</b></p>
+            <p style="margin-top: 0rem; margin-bottom: 0; color: #666; font-size: 0.9rem;">รหัสอ้างอิงการจองคิว: #{st.session_state.appointment_id}</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        st.write("#### 📑 สรุปรายละเอียดการนัดหมาย")
+        
+        st.markdown(f"""
+        <div style="background-color: white; padding: 1.2rem; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); margin-bottom: 1.5rem;">
+            <div style="display: flex; justify-content: space-between; align-items: flex-start; padding: 0.6rem 0; border-bottom: 1px solid #eee;">
+                <span style="color: #666; font-weight: bold; flex-shrink: 0; min-width: 115px;">ประเภทบริการ:</span>
+                <span style="text-align: right; font-weight: bold; color: {theme['primary']}; word-break: break-word; flex-grow: 1; padding-left: 10px;">{st.session_state.selected_service}</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: flex-start; padding: 0.6rem 0; border-bottom: 1px solid #eee;">
+                <span style="color: #666; font-weight: bold; flex-shrink: 0; min-width: 115px;">ชื่อผู้รับบริการ:</span>
+                <span style="text-align: right; word-break: break-word; flex-grow: 1; padding-left: 10px;">{st.session_state.user_name}</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: flex-start; padding: 0.6rem 0; border-bottom: 1px solid #eee;">
+                <span style="color: #666; font-weight: bold; flex-shrink: 0; min-width: 115px;">เบอร์โทรติดต่อ:</span>
+                <span style="text-align: right; word-break: break-word; flex-grow: 1; padding-left: 10px;">{st.session_state.user_phone}</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: flex-start; padding: 0.6rem 0; border-bottom: 1px solid #eee;">
+                <span style="color: #666; font-weight: bold; flex-shrink: 0; min-width: 115px;">วันที่นัดหมาย:</span>
+                <span style="text-align: right; font-weight: bold; word-break: break-word; flex-grow: 1; padding-left: 10px;">{thai_date_str}</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: flex-start; padding: 0.6rem 0; border-bottom: 1px solid #eee;">
+                <span style="color: #666; font-weight: bold; flex-shrink: 0; min-width: 115px;">เวลานัดหมาย:</span>
+                <span style="text-align: right; font-weight: bold; color: {theme['primary']}; word-break: break-word; flex-grow: 1; padding-left: 10px;">{st.session_state.selected_time} น.</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: flex-start; padding: 0.6rem 0; border-bottom: 1px solid #eee;">
+                <span style="color: #666; font-weight: bold; flex-shrink: 0; min-width: 115px;">ลำดับคิว:</span>
+                <span style="text-align: right; font-weight: bold; color: {theme['primary']}; word-break: break-word; flex-grow: 1; padding-left: 10px;">คิวที่ {q_num}</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: flex-start; padding: 0.6rem 0;">
+                <span style="color: #666; font-weight: bold; flex-shrink: 0; min-width: 115px;">สถานที่:</span>
+                <span style="text-align: right; word-break: break-word; flex-grow: 1; padding-left: 10px;">{dept_name} สสจ.สระแก้ว</span>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        st.markdown("""
+        <div style="background-color: #E8F1F2; padding: 1rem; border-radius: 8px; font-size: 0.9rem; color: #1D3557; margin-bottom: 1.5rem;">
+            <b>💡 ข้อแนะนำในการเข้ารับบริการ:</b>
+            <ul style="margin: 0.5rem 0 0 1rem; padding: 0;">
+                <li>กรุณาเดินทางมาถึง สสจ.สระแก้ว ก่อนเวลานัดหมายอย่างน้อย 15 นาที</li>
+                <li>กรุณานำ<b>บัตรประจำตัวประชาชนตัวจริง</b>มาด้วยในวันนัดหมาย</li>
+                <li>หากต้องการยกเลิกหรือเลื่อนนัดหมาย กรุณาติดต่อล่วงหน้าอย่างน้อย 1 วัน</li>
+            </ul>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # 1. ลิงก์บันทึกลง Google Calendar
+        # แปลงข้อมูลเวลา
+        date_formatted = st.session_state.selected_date.strftime("%Y%m%d")
+        hour_str, min_str = st.session_state.selected_time.split(":")
+        
+        start_dt = f"{date_formatted}T{hour_str}{min_str}00"
+        # สมมติใช้เวลาตรวจ 30 นาที
+        end_time_min = int(min_str) + 30
+        end_time_hour = int(hour_str)
+        if end_time_min >= 60:
+            end_time_min -= 60
+            end_time_hour += 1
+        end_dt = f"{date_formatted}T{end_time_hour:02d}{end_time_min:02d}00"
+        
+        app_id_str = st.session_state.appointment_id if st.session_state.appointment_id else f"{st.session_state.selected_dept.upper()}-CONFIRM"
+        title = f"นัดหมาย{theme['title_thai']} [{app_id_str}]: {st.session_state.selected_service}"
+        details = f"รหัสอ้างอิงการจองคิว: {app_id_str}\nแผนก: {theme['title_thai']}\nประเภทบริการ: {st.session_state.selected_service}\nผู้เข้ารับบริการ: {st.session_state.user_name}\nเบอร์โทรศัพท์ติดต่อ: {st.session_state.user_phone}\n\nสสจ.สระแก้ว ใส่ใจสุขภาพ เคียงข้างประชาชน"
+        location = "สำนักงานสาธารณสุขจังหวัดสระแก้ว อ.เมืองสระแก้ว จ.สระแก้ว"
+        
+        # เลือก Google Calendar ID แยกตามแผนกบริการ (ใช้ค่าเฉพาะของแผนก หรือค่าเริ่มต้นส่วนกลาง)
+        active_calendar_id = get_calendar_id(st.session_state.selected_dept)
+        if not active_calendar_id:
+            active_calendar_id = google_calendar_id
+            
+        gcal_url = f"https://calendar.google.com/calendar/render?action=TEMPLATE&text={urllib.parse.quote(title)}&dates={start_dt}/{end_dt}&details={urllib.parse.quote(details)}&location={urllib.parse.quote(location)}"
+        if active_calendar_id:
+            gcal_url += f"&src={urllib.parse.quote(active_calendar_id)}"
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown(f'<a href="{gcal_url}" target="_blank" style="text-decoration: none;"><button style="width:100%; height:45px; background-color:#4285F4; color:white; border-radius:10px; font-weight:600; border:none;">📅 บันทึกในปฏิทิน Google</button></a>', unsafe_allow_html=True)
+        with col2:
+            if st.button("ทำนัดหมายใหม่ 🔄", use_container_width=True):
+                # รีเซ็ตสเตจจองใหม่
+                st.session_state.step = 1
+                st.session_state.selected_service = ""
+                st.session_state.selected_time = ""
+                st.session_state.appointment_id = None
+
+else:
+    # ----------------- STAFF PORTAL -----------------
+    st.markdown("<h2 style='text-align: center; color: #5A2A94; font-weight: 800;'>🔒 ระบบหลังบ้านและรายงานสถิติ</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='text-align: center; color: #7B2CBF; font-size: 0.95rem; font-weight: 500; margin-bottom: 2rem;'>เจ้าหน้าที่ สสจ.สระแก้ว</p>", unsafe_allow_html=True)
+    
+    # ตรวจสอบล็อกอิน
+    if "staff_logged_in" not in st.session_state:
+        st.session_state.staff_logged_in = False
+        
+    if not st.session_state.staff_logged_in:
+        col_sec_left, col_sec_mid, col_sec_right = st.columns([1, 2, 1])
+        with col_sec_mid:
+            st.markdown("""
+            <div style="background-color: white; padding: 2rem; border-radius: 15px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); border-top: 5px solid #7B2CBF; text-align: center;">
+                <h4 style="color: #240046; margin-bottom: 1rem;">ยืนยันตนเข้าใช้หลังบ้าน</h4>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            passcode_label = "รหัสผ่านเจ้าหน้าที่ (รหัสผ่านคือ 1234 ในโหมดจำลอง):" if is_demo else "รหัสผ่านเจ้าหน้าที่:"
+            passcode = st.text_input(passcode_label, type="password")
+            if st.button("ยืนยันรหัสผ่าน 🔑", use_container_width=True):
+                if passcode.strip() == staff_password:
+                    st.session_state.staff_logged_in = True
+                    st.success("สิทธิ์การเข้าใช้งานถูกต้อง กำลังโหลดระบบหลังบ้าน...")
+                    st.rerun()
+                else:
+                    secrets_keys = list(st.secrets.keys()) if hasattr(st, "secrets") else []
+                    st.error(f"รหัสผ่านผู้ใช้งานไม่ถูกต้อง กรุณากรอกอีกครั้ง (ดึงจากระบบ: '{staff_password}', คีย์ทั้งหมดที่เจอใน Secrets: {secrets_keys})")
+    else:
+        # แถบข้างเพิ่มปุ่มออกจากระบบ
+        if st.sidebar.button("🚪 ออกจากระบบหลังบ้าน"):
+            st.session_state.staff_logged_in = False
+            st.rerun()
+            
+        # สร้างแท็บควบคุม
+        tab_dash, tab_book, tab_manage, tab_services, tab_depts, tab_doctors, tab_credentials = st.tabs([
+            "📊 แดชบอร์ด & รายงาน", 
+            "📅 เจ้าหน้าที่ลงนัดเอง", 
+            "📋 จัดการสิทธิ์การนัดหมาย",
+            "⚙️ ตั้งค่าและบริการ",
+            "🏥 จัดการแผนกบริการ",
+            "🩺 จัดการข้อมูลแพทย์",
+            "🔑 ตั้งค่าการเชื่อมต่อ (Credentials)"
+        ])
+        
+        # ดึงข้อมูลการนัดหมายทั้งหมด
+        all_apps = fetch_all_appointments()
+        
+        # --- TAB 1: DASHBOARD ---
+        with tab_dash:
+            st.write("### สรุปตัวเลขและการวิเคราะห์ข้อมูล")
+            st.link_button(
+                "🌐 กดเพื่อดู Dashboard on Web", 
+                "https://script.google.com/macros/s/AKfycbxBgYDXVpAoxwKO5CExTNnU2POMdR71IeTvJFFxYbf8GWdzE6lA_SL2bW0T5XwCSjuc2w/exec", 
+                type="primary", 
+                use_container_width=True
+            )
+            st.write("")
+            
+            depts_list = fetch_all_departments()
+            dash_choices = ["รวมทุกแผนก (All Departments)"] + [f"{d['display_name']} ({d['key']})" for d in depts_list]
+            
+            dash_dept_filter = st.selectbox(
+                "กรองตามแผนกบริการ:",
+                dash_choices,
+                key="dash_dept_select"
+            )
+            
+            if dash_dept_filter == "รวมทุกแผนก (All Departments)":
+                selected_dash_dept = "all"
+            else:
+                selected_dash_dept = depts_list[dash_choices.index(dash_dept_filter) - 1]["key"]
+            
+            if not all_apps:
+                st.info("ไม่มีรายการนัดหมายในระบบในขณะนี้")
+            else:
+                df_all = pd.DataFrame(all_apps)
+                # กรองตามแผนกที่เลือก
+                if selected_dash_dept != "all":
+                    df = df_all[df_all['department'] == selected_dash_dept]
+                else:
+                    df = df_all
+                
+                if df.empty:
+                    st.info("ไม่มีข้อมูลการนัดหมายตามแผนกที่เลือก")
+                else:
+                    # คำนวณยอด
+                    total_count = len(df)
+                    today_str = datetime.date.today().isoformat()
+                    today_count = len(df[df['appointment_date'] == today_str])
+                    
+                    # ยอดสัปดาห์นี้
+                    df['date_parsed'] = pd.to_datetime(df['appointment_date'])
+                    today_dt = datetime.datetime.now()
+                    start_of_week = today_dt - datetime.timedelta(days=today_dt.weekday())
+                    end_of_week = start_of_week + datetime.timedelta(days=6)
+                    week_count = len(df[(df['date_parsed'] >= pd.to_datetime(start_of_week.date())) & (df['date_parsed'] <= pd.to_datetime(end_of_week.date()))])
+                    
+                    # แสดงตัวเลข KPI Metrics
+                    kpi_col1, kpi_col2, kpi_col3 = st.columns(3)
+                    with kpi_col1:
+                        st.metric("จำนวนนัดสะสมทั้งหมด", f"{total_count} คิว")
+                    with kpi_col2:
+                        st.metric("นัดหมายเข้ารับบริการวันนี้", f"{today_count} คิว")
+                    with kpi_col3:
+                        st.metric("นัดหมายสัปดาห์นี้", f"{week_count} คิว")
+                        
+                    st.divider()
+                    
+                    # กำหนดสีชาร์ตตามแผนก
+                    chart_color = "#7B2CBF"
+                    if selected_dash_dept == "thai_traditional":
+                        chart_color = "#2D6A4F"
+                    elif selected_dash_dept == "physical_therapy":
+                        chart_color = "#0077B6"
+                    
+                    # กราฟแยกตามบริการ
+                    st.write("#### 📊 สัดส่วนจำแนกตามประเภทบริการรักษา")
+                    service_counts = df['service_type'].value_counts()
+                    st.bar_chart(service_counts, color=chart_color)
+                    
+                    chart_col1, chart_col2 = st.columns(2)
+                    
+                    # กราฟสถิติตามเวลา (Peak Hours)
+                    with chart_col1:
+                        st.write("#### ⏰ ช่วงเวลาที่มีผู้ลงนัดสูงสุด (Peak Hours)")
+                        time_counts = df['appointment_time'].value_counts().sort_index()
+                        st.bar_chart(time_counts, color="#FFB703")
+                        
+                    # กราฟจำนวนจองรายวัน
+                    with chart_col2:
+                        st.write("#### 📈 แนวโน้มคนไข้รายวัน")
+                        daily_counts = df.groupby('appointment_date').size().reset_index(name='จำนวนคนไข้')
+                        daily_counts = daily_counts.sort_values('appointment_date').set_index('appointment_date')
+                        st.line_chart(daily_counts, color=chart_color)
+ 
+        # --- TAB 2: STAFF MANUAL BOOKING ---
+        with tab_book:
+            st.write("### 📅 บันทึกข้อมูลนัดหมายผู้รับบริการ (กรณีโทรมาจอง)")
+            
+            depts_list = fetch_all_departments()
+            staff_dept_choices = [f"{d['display_name']} ({d['key']})" for d in depts_list]
+            
+            if not depts_list:
+                st.warning("⚠️ ไม่มีแผนกเปิดให้บริการในระบบ")
+                selected_staff_dept = "dental"
+            else:
+                staff_dept = st.selectbox(
+                    "เลือกแผนกบริการที่ต้องการบันทึกนัดหมาย:",
+                    staff_dept_choices,
+                    key="staff_manual_dept"
+                )
+                selected_staff_dept = depts_list[staff_dept_choices.index(staff_dept)]["key"]
+            
+            with st.form("staff_manual_form"):
+                # ดึงบริการสำหรับแผนกนี้
+                staff_db_services = fetch_services(selected_staff_dept)
+                staff_service_choices = [s.get("title", "") for s in staff_db_services]
+                if not staff_service_choices:
+                    staff_service_choices = ["อื่นๆ (ระบุ)"]
+                elif "อื่นๆ (ระบุ)" not in staff_service_choices:
+                    staff_service_choices.append("อื่นๆ (ระบุ)")
+                    
+                staff_service = st.selectbox(
+                    "ประเภทบริการรักษา:",
+                    staff_service_choices
+                )
+                custom_staff_service = st.text_input("กรณีเลือกบริการอื่นๆ กรุณาระบุรายละเอียด:")
+                
+                # เพิ่มแพทย์ในช่องเลือกของเจ้าหน้าที่ลงนัดเอง
+                staff_doctors = fetch_doctors(selected_staff_dept)
+                staff_doctor_choices = ["ไม่ระบุแพทย์"] + [f"{doc['name']}" for doc in staff_doctors]
+                staff_doc_select = st.selectbox(
+                    "ระบุแพทย์ผู้ให้บริการ:",
+                    staff_doctor_choices
+                )
+                selected_staff_doctor_id = None
+                selected_staff_doc = None
+                if staff_doc_select != "ไม่ระบุแพทย์" and staff_doctors:
+                    selected_staff_doctor_id = staff_doctors[staff_doctor_choices.index(staff_doc_select) - 1]["id"]
+                    selected_staff_doc = staff_doctors[staff_doctor_choices.index(staff_doc_select) - 1]
+
+                # ดึงค่าการตั้งค่าจากระบบของแผนกหรือแพทย์ที่เลือก
+                dept_settings = get_settings(selected_staff_dept)
+                booking_range = dept_settings.get("booking_range_days", 30)
+                closed_dates = dept_settings.get("closed_dates", [])
+                
+                if selected_staff_doc:
+                    working_days = selected_staff_doc.get("working_days", [0, 1, 2, 3, 4])
+                    all_slots = selected_staff_doc.get("working_hours", [])
+                else:
+                    working_days = dept_settings.get("working_days", [0, 1, 2, 3, 4])
+                    all_slots = dept_settings.get("time_slots", ["08:30", "09:00", "09:30", "10:00", "13:30", "14:00", "14:30", "15:30", "16:00"])
+                
+                thai_days_name = ["จันทร์", "อังคาร", "พุธ", "พฤหัสบดี", "ศุกร์", "เสาร์", "อาทิตย์"]
+                working_days_text = ", ".join([thai_days_name[d] for d in working_days])
+                
+                staff_date = st.date_input(
+                    f"เลือกวันที่นัดหมาย (ตารางออกตรวจ: {working_days_text}):",
+                    min_value=datetime.date.today(),
+                    max_value=datetime.date.today() + datetime.timedelta(days=booking_range)
+                )
+                
+                # ตรวจสอบวันหยุดและวันให้บริการ
+                selected_weekday = staff_date.weekday()
+                selected_date_str = staff_date.isoformat()
+                
+                is_valid_date = True
+                if selected_weekday not in working_days:
+                    st.warning(f"⚠️ ปิดออกตรวจในวัน{thai_days_name[selected_weekday]} (วันเปิดออกตรวจ: {working_days_text})")
+                    is_valid_date = False
+                elif selected_date_str in closed_dates:
+                    st.warning(f"⚠️ วันที่ {format_thai_date(staff_date)} เป็นวันหยุดพิเศษ/งดให้บริการ")
+                    is_valid_date = False
+                
+                # ดึงช่วงเวลาที่ว่าง
+                booked_slots = get_booked_slots(
+                    staff_date, 
+                    selected_staff_dept, 
+                    staff_service,
+                    doctor_id=selected_staff_doctor_id
+                )
+                available_slots = [s for s in all_slots if s not in booked_slots]
+                
+                if not is_valid_date:
+                    staff_time = None
+                elif not available_slots:
+                    st.warning("⚠️ ไม่มีช่วงเวลาว่างของแพทย์/แผนกในวันนี้ กรุณาเปลี่ยนวันที่ต้องการจอง")
+                    staff_time = None
+                else:
+                    staff_time = st.selectbox("เลือกช่วงเวลานัดหมาย:", available_slots)
+                    
+                st.divider()
+                st.write("**👤 ข้อมูลผู้รับบริการ**")
+                p_name = st.text_input("ชื่อ-นามสกุล:")
+                p_phone = st.text_input("เบอร์โทรศัพท์ (10 หลัก):", max_chars=10)
+                p_cid = st.text_input("เลขบัตรประจำตัวประชาชน (13 หลัก):", max_chars=13)
+                p_note = st.text_area("หมายเหตุ/อาการเพิ่มเติม:")
+                
+                staff_submitted = st.form_submit_button("💾 บันทึกนัดหมายในระบบทันที", use_container_width=True)
+                
+                if staff_submitted:
+                    final_service = staff_service
+                    if staff_service == "อื่นๆ (ระบุ)":
+                        if custom_staff_service.strip():
+                            final_service = f"อื่นๆ: {custom_staff_service}"
+                        else:
+                            st.error("กรุณาระบุรายละเอียดเพิ่มเติมในช่องบริการอื่นๆ")
+                            final_service = None
+                            
+                    errors = []
+                    if not p_name.strip():
+                        errors.append("กรุณาระบุชื่อ-นามสกุลผู้ป่วย")
+                    if not p_phone.strip() or len(p_phone.strip()) != 10 or not p_phone.isdigit():
+                        errors.append("กรุณาระบุเบอร์โทรศัพท์ให้ครบ 10 หลัก")
+                    if not validate_thai_cid(p_cid):
+                        errors.append("เลขบัตรประจำตัวประชาชนไม่ถูกต้องตามมาตรฐาน 13 หลัก")
+                    if not staff_time:
+                        errors.append("ไม่มีช่วงเวลาใดที่จองได้")
+                        
+                    if errors:
+                        for err in errors:
+                            st.error(err)
+                    elif final_service:
+                        success, message = execute_booking(
+                            dept=selected_staff_dept,
+                            user_id="STAFF_MANUAL",
+                            name=p_name,
+                            phone=p_phone,
+                            cid=p_cid,
+                            service=final_service,
+                            app_date=staff_date,
+                            app_time=staff_time,
+                            note=p_note,
+                            doctor_id=selected_staff_doctor_id
+                        )
+                        if success:
+                            st.session_state.toast_notification = {"message": f"ลงนัดหมายให้คุณ '{p_name}' เรียบร้อยแล้ว! 📅", "icon": "✅"}
+                            st.rerun()
+                        else:
+                            st.error(f"เกิดข้อผิดพลาด: {message}")
+ 
+        # --- TAB 3: MANAGE APPOINTMENTS ---
+        with tab_manage:
+            st.write("### 🔍 ตารางรายชื่อผู้ลงทะเบียนนัดหมาย")
+            
+            manage_dept_filter = st.selectbox(
+                "กรองแผนกนัดหมายที่ต้องการตรวจสอบ:",
+                ["รวมทุกแผนก (All Departments)", "แผนกทันตกรรม (Dental)", "แผนกแพทย์แผนไทย (Traditional Thai)", "แผนกกายภาพบำบัด (Physical Therapy)"],
+                key="manage_dept_select"
+            )
+            manage_dept_map = {
+                "รวมทุกแผนก (All Departments)": "all",
+                "แผนกทันตกรรม (Dental)": "dental",
+                "แผนกแพทย์แผนไทย (Traditional Thai)": "thai_traditional",
+                "แผนกกายภาพบำบัด (Physical Therapy)": "physical_therapy"
+            }
+            selected_manage_dept_tab3 = manage_dept_map[manage_dept_filter]
+            
+            if not all_apps:
+                st.info("ไม่มีรายการคิวนัดหมายในขณะนี้")
+            else:
+                df_all = pd.DataFrame(all_apps)
+                # กรองตามแผนก
+                if selected_manage_dept_tab3 != "all":
+                    df = df_all[df_all['department'] == selected_manage_dept_tab3]
+                else:
+                    df = df_all
+                
+                if df.empty:
+                    st.info("ไม่มีรายการคิวนัดหมายตามแผนกที่เลือก")
+                else:
+                    # ค้นหา
+                    search_query = st.text_input("ค้นหาด่วน (ชื่อผู้รับบริการ, เบอร์โทร, หรือเลขบัตรประชาชน):")
+                    if search_query.strip():
+                        df_show = df[
+                            df['name'].str.contains(search_query, case=False, na=False) |
+                            df['phone'].str.contains(search_query, case=False, na=False) |
+                            df['cid'].str.contains(search_query, case=False, na=False)
+                        ]
+                    else:
+                        df_show = df
+                        
+                    if df_show.empty:
+                        st.info("ไม่พบข้อมูลการจองคิวตามที่ค้นหา")
+                    else:
+                        # ตรวจสอบคอลัมน์ doctor_id
+                        if "doctor_id" not in df_show.columns:
+                            df_show["doctor_id"] = None
+                            
+                        # ฟอร์แมตหัวตารางแสดงสิทธิ์
+                        df_show_display = df_show[[
+                            "id", "department", "name", "phone", "cid", "service_type", "doctor_id",
+                            "appointment_date", "appointment_time", "note", "status"
+                        ]].copy()
+                        
+                        # แปลงแผนกให้อ่านง่าย
+                        dept_display_map = {
+                            "dental": "ทันตกรรม 🦷",
+                            "thai_traditional": "แพทย์แผนไทย 🍃",
+                            "physical_therapy": "กายภาพบำบัด ♿"
+                        }
+                        df_show_display['department'] = df_show_display['department'].map(dept_display_map)
+                        
+                        # แปลงสถานะให้อ่านง่าย
+                        status_display_map = {
+                            "booked": "⏳ รอดำเนินการ",
+                            "completed": "✅ เสร็จสิ้น",
+                            "pending": "⏳ รอดำเนินการ"
+                        }
+                        df_show_display['status'] = df_show_display['status'].map(status_display_map).fillna("⏳ รอดำเนินการ")
+                        
+                        # แปลงข้อมูลชื่อแพทย์
+                        try:
+                            docs_all = fetch_doctors()
+                            docs_map = {doc["id"]: doc["name"] for doc in docs_all}
+                            df_show_display['doctor_id'] = df_show_display['doctor_id'].map(docs_map).fillna("ไม่ระบุแพทย์")
+                        except Exception as e:
+                            df_show_display['doctor_id'] = "ไม่ระบุแพทย์"
+                            
+                        df_show_display.columns = [
+                            "รหัสนัด", "แผนก", "ชื่อ-นามสกุล", "เบอร์โทร", "เลขบัตรประชาชน", 
+                            "ประเภทบริการ", "แพทย์ผู้ให้บริการ", "วันที่นัดหมาย", "เวลานัด", "หมายเหตุ", "สถานะ"
+                        ]
+                        
+                        # แทรกคอลัมน์เลือกสำหรับการเลือกลบแบบกลุ่ม (Bulk Delete)
+                        df_show_display.insert(0, "เลือก", False)
+                        
+                        edited_df = st.data_editor(
+                            df_show_display,
+                            use_container_width=True,
+                            hide_index=True,
+                            disabled=["รหัสนัด", "แผนก", "ชื่อ-นามสกุล", "เบอร์โทร", "เลขบัตรประชาชน", "ประเภทบริการ", "แพทย์ผู้ให้บริการ", "วันที่นัดหมาย", "เวลานัด", "หมายเหตุ", "สถานะ"]
+                        )
+                        
+                        selected_rows = edited_df[edited_df["เลือก"] == True]
+                        
+                        # ส่วนควบคุมสถานะและการยกเลิกนัดหมาย
+                        st.divider()
+                        st.write("#### ⚙️ จัดการสถานะและการเข้ารับบริการ")
+                        
+                        col_action1, col_action2 = st.columns(2)
+                        with col_action1:
+                            btn_complete = st.button("✅ บันทึกเป็น 'เสร็จสิ้นการบริการ' (จบกระบวนการ)", type="secondary", use_container_width=True, disabled=selected_rows.empty)
+                        with col_action2:
+                            btn_delete = st.button("🗑️ ยกเลิกและลบคิวนัดหมายผู้เข้าบริการ", type="primary", use_container_width=True, disabled=selected_rows.empty)
+                        
+                        if not selected_rows.empty:
+                            if btn_complete:
+                                success_count = 0
+                                fail_count = 0
+                                fail_messages = []
+                                for _, row in selected_rows.iterrows():
+                                    app_id = int(row["รหัสนัด"])
+                                    success, message = complete_appointment_db(app_id)
+                                    if success:
+                                        success_count += 1
+                                    else:
+                                        fail_count += 1
+                                        fail_messages.append(f"รหัส #{app_id}: {message}")
+                                if success_count > 0:
+                                    st.session_state.toast_notification = {"message": f"บันทึกเสร็จสิ้นการบริการสำเร็จ {success_count} รายการ!", "icon": "✅"}
+                                if fail_count > 0:
+                                    st.error(f"เกิดข้อผิดพลาด {fail_count} รายการ:\n" + "\n".join(fail_messages))
+                                st.rerun()
+                                
+                            if btn_delete:
+                                st.session_state.confirm_bulk_delete = True
+                                st.rerun()
+                                
+                        if st.session_state.get("confirm_bulk_delete") and not selected_rows.empty:
+                            st.warning(f"⚠️ คุณกำลังจะลบคิวนัดหมายที่เลือกจำนวน {len(selected_rows)} รายการ การลบนี้จะเปิดเวลากลับคืนระบบเพื่อให้ผู้อื่นจองใหม่ได้")
+                            cc1, cc2 = st.columns(2)
+                            with cc1:
+                                if st.button("ยืนยันลบรายการที่เลือกทั้งหมด 🗑️", type="primary", use_container_width=True):
+                                    del st.session_state.confirm_bulk_delete
+                                    success_count = 0
+                                    fail_count = 0
+                                    fail_messages = []
+                                    
+                                    for _, row in selected_rows.iterrows():
+                                        app_id = int(row["รหัสนัด"])
+                                        # ดึงข้อมูลก่อนลบเพื่อใช้ส่งไลน์ OA
+                                        app_data = fetch_appointment_by_id(app_id)
+                                        
+                                        success, message = cancel_appointment_db(app_id)
+                                        if success:
+                                            success_count += 1
+                                            # แจ้งเตือนผู้รับบริการทาง LINE OA (ยกเว้นผู้ที่จบกระบวนการเสร็จสิ้นแล้ว)
+                                            if app_data and app_data.get("user_id") and app_data.get("user_id") != "NON_LINE_USER" and not app_data.get("user_id").startswith("STAFF"):
+                                                if app_data.get("status", "booked") != "completed":
+                                                    dept_name_th = DEPT_THEMES.get(app_data.get("department", ""), {}).get("title_thai", "บริการทั่วไป")
+                                                    if not dept_name_th.startswith("แผนก"):
+                                                        dept_name_th = f"แผนก{dept_name_th}"
+                                                    try:
+                                                        date_obj = datetime.date.fromisoformat(app_data.get("appointment_date", ""))
+                                                        thai_date_str = format_thai_date(date_obj)
+                                                    except Exception:
+                                                        thai_date_str = app_data.get("appointment_date", "")
+                                                    time_str = ":".join(str(app_data.get("appointment_time", "")).split(":")[:2])
+                                                    
+                                                    cancel_msg = f"แจ้งเตือน: นัดหมาย {dept_name_th} วันที่ {thai_date_str} เวลา {time_str} น. ของท่าน ได้รับการยกเลิกโดยเจ้าหน้าที่เรียบร้อยแล้วค่ะ"
+                                                    send_line_push_message(app_data.get("user_id"), cancel_msg)
+                                        else:
+                                            fail_count += 1
+                                            fail_messages.append(f"รหัส #{app_id}: {message}")
+                                    
+                                    if success_count > 0:
+                                        msg_text = f"ยกเลิกนัดหมายสำเร็จ {success_count} รายการ และเปิดสล็อตเวลากลับคืนระบบเรียบร้อยแล้ว!"
+                                        st.session_state.toast_notification = {"message": msg_text, "icon": "✅"}
+                                    if fail_count > 0:
+                                        st.warning(f"ลบล้มเหลว {fail_count} รายการ:\n" + "\n".join(fail_messages))
+                                    st.rerun()
+                            with cc2:
+                                if st.button("ยกเลิกการลบ ✖️", use_container_width=True):
+                                    del st.session_state.confirm_bulk_delete
+                                    st.rerun()
+                        elif selected_rows.empty:
+                            if "confirm_bulk_delete" in st.session_state:
+                                del st.session_state.confirm_bulk_delete
+                            st.info("💡 กรุณาติ๊กเลือกช่อง 'เลือก' ที่แถวด้านซ้ายมือสุดของตาราง เพื่อเลือกรายการที่ต้องการดำเนินการ")
+ 
+        # --- TAB 4: MANAGE SERVICES ---
+        with tab_services:
+            st.write("### ⚙️ จัดการรายการบริการ (เพิ่ม/แก้ไข/ลบ)")
+            
+            depts_list = fetch_all_departments()
+            manage_dept_choices = [f"{d['display_name']} ({d['key']})" for d in depts_list]
+            
+            if not depts_list:
+                st.warning("⚠️ ไม่มีแผนกเปิดให้บริการในระบบ")
+                selected_manage_dept = "dental"
+            else:
+                manage_dept = st.selectbox(
+                    "เลือกแผนกบริการที่ต้องการจัดการ:",
+                    manage_dept_choices,
+                    key="staff_manage_services_dept"
+                )
+                selected_manage_dept = depts_list[manage_dept_choices.index(manage_dept)]["key"]
+            
+            # โหลดบริการของแผนกที่เลือก
+            current_services = fetch_services(selected_manage_dept)
+            
+            # แบ่งส่วน Add, Edit, Delete, ตั้งค่าคิว และตั้งค่าปฏิทินด้วย subtabs
+            subtab_list, subtab_add, subtab_edit, subtab_delete, subtab_schedule, subtab_gcal = st.tabs([
+                "📋 รายการบริการปัจจุบัน",
+                "➕ เพิ่มบริการใหม่",
+                "✏️ แก้ไขบริการที่มีอยู่",
+                "❌ ลบบริการ",
+                "📅 จัดการวันและเวลาให้บริการ",
+                "📅 ตั้งค่า Google Calendar"
+            ])
+            
+            with subtab_list:
+                st.write(f"#### รายการบริการของ{manage_dept}ทั้งหมดในระบบ")
+                if not current_services:
+                    st.info("ไม่มีรายการบริการในระบบในขณะนี้")
+                else:
+                    for s in current_services:
+                        with st.container():
+                            st.markdown(f"""
+                            <div class="service-card" style="margin-bottom: 10px;">
+                                <h5>{s.get('icon', '🦷')} {s.get('title', '')} (รหัส: {s.get('id', '')})</h5>
+                                <p style="margin: 0; color: #666; font-size: 0.9rem;">{s.get('description', '')}</p>
+                            </div>
+                            """, unsafe_allow_html=True)
+                            
+            with subtab_add:
+                st.write(f"#### เพิ่มบริการใหม่ของ{manage_dept}")
+                with st.form("add_service_form"):
+                    new_title = st.text_input("ชื่อบริการ (เช่น ขูดหินปูน, นวดแผนไทย):")
+                    new_desc = st.text_area("คำอธิบายบริการ:")
+                    
+                    default_icon_map = {
+                        "dental": "🦷",
+                        "thai_traditional": "💆‍♂️",
+                        "physical_therapy": "🚶‍♂️"
+                    }
+                    new_icon = st.text_input("อีโมจิไอคอน:", value=default_icon_map[selected_manage_dept])
+                    
+                    add_submitted = st.form_submit_button("➕ บันทึกบริการใหม่", use_container_width=True)
+                    if add_submitted:
+                        if not new_title.strip():
+                            st.error("กรุณาระบุชื่อบริการ")
+                        else:
+                            success, message = add_service_db(selected_manage_dept, new_title.strip(), new_desc.strip(), new_icon.strip())
+                            if success:
+                                st.session_state.toast_notification = {"message": f"เพิ่มบริการ '{new_title.strip()}' ใหม่สำเร็จ! ➕", "icon": "✅"}
+                                st.rerun()
+                            else:
+                                st.error(message)
+                                
+            with subtab_edit:
+                st.write(f"#### แก้ไขบริการของ{manage_dept}")
+                if not current_services:
+                    st.info("ไม่มีรายการบริการให้แก้ไข")
+                else:
+                    service_edit_options = {
+                        f"{s.get('icon', '🦷')} {s.get('title', '')}": s
+                        for s in current_services
+                    }
+                    selected_edit_label = st.selectbox(
+                        "เลือกบริการที่ต้องการแก้ไข:",
+                        list(service_edit_options.keys()),
+                        key="sb_edit_service"
+                    )
+                    selected_service_obj = service_edit_options[selected_edit_label]
+                    
+                    with st.form("edit_service_form"):
+                        edit_title = st.text_input("ชื่อบริการ:", value=selected_service_obj.get("title", ""))
+                        edit_desc = st.text_area("คำอธิบายบริการ:", value=selected_service_obj.get("description", ""))
+                        edit_icon = st.text_input("อีโมจิไอคอน:", value=selected_service_obj.get("icon", "🦷"))
+                        
+                        edit_submitted = st.form_submit_button("✏️ บันทึกการแก้ไข", use_container_width=True)
+                        if edit_submitted:
+                            if not edit_title.strip():
+                                st.error("กรุณาระบุชื่อบริการ")
+                            else:
+                                success, message = update_service_db(
+                                    selected_service_obj["id"],
+                                    selected_manage_dept,
+                                    edit_title.strip(),
+                                    edit_desc.strip(),
+                                    edit_icon.strip()
+                                )
+                                if success:
+                                    st.session_state.toast_notification = {"message": f"แก้ไขบริการ '{edit_title.strip()}' เรียบร้อยแล้ว! ✏️", "icon": "✅"}
+                                    st.rerun()
+                                else:
+                                    st.error(message)
+                                    
+            with subtab_delete:
+                st.write(f"#### ลบบริการออกจากระบบ")
+                if not current_services:
+                    st.info("ไม่มีรายการบริการให้ลบ")
+                else:
+                    service_del_options = {
+                        f"{s.get('icon', '🦷')} {s.get('title', '')}": s
+                        for s in current_services
+                    }
+                    selected_del_label = st.selectbox(
+                        "เลือกบริการที่ต้องการลบ:",
+                        list(service_del_options.keys()),
+                        key="sb_del_service"
+                    )
+                    selected_del_obj = service_del_options[selected_del_label]
+                    
+                    st.warning(f"⚠️ คำเตือน: คุณแน่ใจหรือไม่ว่าต้องการลบบริการ '{selected_del_obj.get('title')}' ออกจากระบบ?")
+                    
+                    if st.button("❌ ยืนยันการลบบริการ", type="primary", use_container_width=True):
+                        success, message = delete_service_db(selected_del_obj["id"])
+                        if success:
+                            st.session_state.toast_notification = {"message": f"ลบบริการ '{selected_del_obj.get('title')}' สำเร็จ! 🗑️", "icon": "✅"}
+                            st.rerun()
+                        else:
+                            st.error(message)
+                            
+            with subtab_schedule:
+                st.write(f"#### ⚙️ จัดการเวลาและวันให้บริการของ {manage_dept}")
+                
+                # ดึงการตั้งค่าปัจจุบัน
+                dept_settings = get_settings(selected_manage_dept)
+                
+                # 1. ระยะเวลาเปิดให้จองล่วงหน้า
+                cfg_range = st.number_input(
+                    "ระยะจำนวนวันเปิดให้จองล่วงหน้า (วัน):",
+                    min_value=1,
+                    max_value=365,
+                    value=dept_settings.get("booking_range_days", 30),
+                    help="กำหนดว่าคนไข้สามารถทำนัดหมายล่วงหน้าได้กี่วันนับจากวันนี้",
+                    key=f"cfg_range_{selected_manage_dept}"
+                )
+                
+                # 2. จำนวนคิวสูงสุดต่อสล็อตเวลา
+                cfg_capacity = st.number_input(
+                    "จำนวนผู้รับบริการสูงสุดต่อช่วงเวลา (คิวต่อสล็อต):",
+                    min_value=1,
+                    max_value=20,
+                    value=dept_settings.get("max_bookings_per_slot", 1),
+                    help="กำหนดว่าในหนึ่งช่วงเวลา (เช่น 09:00 น.) สามารถรองรับคนไข้ได้พร้อมกันกี่คน",
+                    key=f"cfg_capacity_{selected_manage_dept}"
+                )
+                
+                st.divider()
+                
+                # 3. วันให้บริการประจำสัปดาห์
+                st.write("**📅 วันเปิดให้บริการประจำสัปดาห์**")
+                days_options = {
+                    "วันจันทร์": 0,
+                    "วันอังคาร": 1,
+                    "วันพุธ": 2,
+                    "วันพฤหัสบดี": 3,
+                    "วันศุกร์": 4,
+                    "วันเสาร์": 5,
+                    "วันอาทิตย์": 6
+                }
+                current_working_days = dept_settings.get("working_days", [0, 1, 2, 3, 4])
+                
+                # แสดง checkbox 7 วันแยกเป็นแถวแนวนอน
+                cols_days = st.columns(7)
+                selected_working_days = []
+                for label, val in days_options.items():
+                    col_idx = val
+                    with cols_days[col_idx]:
+                        checked = val in current_working_days
+                        if st.checkbox(label[3:], value=checked, key=f"wd_{selected_manage_dept}_{val}"):
+                            selected_working_days.append(val)
+                
+                st.divider()
+                
+                # 4. ตารางเวลาให้บริการ (แบบ Slot Builder)
+                st.write("**⏰ ตารางเวลาและกฎให้บริการรายสล็อต (Time Slots & Capacity Rules)**")
+                st.info("💡 สามารถกำหนดเวลา จำนวนคิวที่รับ และบริการที่รับจองในสล็อตเวลานั้นๆ ได้ หากต้องการให้รับจองได้ทุกบริการ ให้ปล่อยช่อง 'บริการที่เปิดรับ' เป็นค่าว่าง")
+
+                # ดึงบริการทั้งหมดของแผนกนี้มาให้เลือก
+                dept_services = fetch_services(selected_manage_dept)
+                service_choices = [s.get("title", "") for s in dept_services if s.get("title")]
+                
+                # โหลดการตั้งค่าสล็อตในปัจจุบัน
+                current_slot_configs = dept_settings.get("slot_configs", [])
+                
+                # หากยังไม่มี slot_configs ในระบบ (พึ่งอัปเกรดจากระบบเดิม) ให้จำลองแปลงข้อมูลจาก time_slots และ max_bookings_per_slot ของเก่า
+                if not current_slot_configs:
+                    old_slots = dept_settings.get("time_slots", ["08:30", "09:00", "09:30", "10:00", "13:30", "14:00", "14:30", "15:30", "16:00"])
+                    old_cap = dept_settings.get("max_bookings_per_slot", 1)
+                    current_slot_configs = [{"time": t, "capacity": old_cap, "allowed_services": []} for t in old_slots]
+
+                # สร้าง Session State สำหรับเก็บข้อมูลการอีดิตรายสล็อตแยกตามแผนกชั่วคราว
+                state_slots_key = f"editing_slots_config_{selected_manage_dept}"
+                if state_slots_key not in st.session_state:
+                    st.session_state[state_slots_key] = current_slot_configs
+
+                # หัวตารางจำลอง
+                col_header_t, col_header_c, col_header_s, col_header_del = st.columns([2, 2, 5, 1])
+                with col_header_t:
+                    st.write("**รอบเวลา**")
+                with col_header_c:
+                    st.write("**จำนวนคิว**")
+                with col_header_s:
+                    st.write("**บริการที่เปิดรับ**")
+                with col_header_del:
+                    st.write("**ลบ**")
+
+                updated_slot_configs = []
+                for idx, slot_item in enumerate(st.session_state[state_slots_key]):
+                    col_t, col_c, col_s, col_del = st.columns([2, 2, 5, 1])
+                    
+                    with col_t:
+                        # ช่องกรอกเวลา (HH:MM)
+                        s_time = st.text_input(
+                            "เวลา",
+                            value=slot_item.get("time", ""),
+                            key=f"item_time_{selected_manage_dept}_{idx}",
+                            label_visibility="collapsed",
+                            placeholder="เช่น 09:00"
+                        ).strip()
+                    
+                    with col_c:
+                        # จำนวนคิวสูงสุด
+                        s_cap = st.number_input(
+                            "จำนวนคิว",
+                            min_value=1,
+                            max_value=50,
+                            value=int(slot_item.get("capacity", 1)),
+                            key=f"item_cap_{selected_manage_dept}_{idx}",
+                            label_visibility="collapsed"
+                        )
+                        
+                    with col_s:
+                        # มัลติซีเล็กเลือกบริการที่ต้องการจำกัด
+                        # ดึงบริการที่มีอยู่ใน choices เท่านั้น
+                        default_allowed = [s for s in slot_item.get("allowed_services", []) if s in service_choices]
+                        s_services = st.multiselect(
+                            "บริการ",
+                            options=service_choices,
+                            default=default_allowed,
+                            key=f"item_services_{selected_manage_dept}_{idx}",
+                            label_visibility="collapsed",
+                            placeholder="เปิดรับทุกบริการ (คลิกเพื่อระบุเฉพาะเจาะจง)"
+                        )
+                        
+                    with col_del:
+                        # ปุ่มลบสล็อต
+                        if st.button("🗑️", key=f"btn_del_item_{selected_manage_dept}_{idx}", use_container_width=True):
+                            st.session_state[state_slots_key].pop(idx)
+                            st.rerun()
+                            
+                    updated_slot_configs.append({
+                        "time": s_time,
+                        "capacity": s_cap,
+                        "allowed_services": s_services
+                    })
+                    
+                # ปุ่มเพิ่มรอบเวลาใหม่
+                col_add_btn, _ = st.columns([1, 2])
+                with col_add_btn:
+                    if st.button("➕ เพิ่มรอบเวลาใหม่", key=f"btn_add_slot_item_{selected_manage_dept}", use_container_width=True):
+                        # ใช้เวลาเริ่มต้นเป็นเวลาเที่ยง
+                        st.session_state[state_slots_key].append({
+                            "time": "12:00",
+                            "capacity": 1,
+                            "allowed_services": []
+                        })
+                        st.rerun()
+
+                # เรียงลำดับตามรอบเวลาเพื่อความเป็นระเบียบเรียบร้อยก่อนบันทึก
+                # กรองค่าว่างและจัดรูปแบบให้ถูกต้องก่อนนำไปแปลงเป็น time_slots รายการใหญ่
+                final_slot_configs = []
+                for s in updated_slot_configs:
+                    if s["time"] and ":" in s["time"]:
+                        # ทำความสะอาดรูปแบบเวลา (เช่น 9:00 -> 09:00)
+                        parts = s["time"].split(":")
+                        try:
+                            h = int(parts[0])
+                            m = int(parts[1])
+                            time_cleaned = f"{h:02d}:{m:02d}"
+                            s["time"] = time_cleaned
+                            final_slot_configs.append(s)
+                        except ValueError:
+                            pass
+                            
+                # จัดเรียงตามเวลา
+                final_slot_configs = sorted(final_slot_configs, key=lambda x: x["time"])
+                
+                # รายชื่อ time_slots แบบข้อความ เพื่อ Backward Compatibility ในฟิลด์เดิมของ DB
+                parsed_slots = [s["time"] for s in final_slot_configs]
+                
+                st.divider()
+                
+                # 5. วันปิดทำการพิเศษ (Closed Dates)
+                st.write("**🚫 วันปิดทำการพิเศษ / วันหยุดแผนก**")
+                current_closed_dates = dept_settings.get("closed_dates", [])
+                
+                col_add_closed, col_list_closed = st.columns([1, 1])
+                
+                with col_add_closed:
+                    st.write("เพิ่มวันหยุดพิเศษ:")
+                    new_closed_date = st.date_input(
+                        "เลือกวันที่ต้องการหยุดให้บริการ:",
+                        min_value=datetime.date.today(),
+                        key=f"add_closed_date_{selected_manage_dept}"
+                    )
+                    new_closed_str = new_closed_date.isoformat()
+                    
+                    if st.button("➕ เพิ่มเป็นวันหยุดพิเศษ", key=f"btn_add_closed_{selected_manage_dept}", use_container_width=True):
+                        if new_closed_str not in current_closed_dates:
+                            current_closed_dates.append(new_closed_str)
+                            # อัปเดต DB ทันทีเพื่อให้แสดงผลในลิสต์โดยไม่ต้องกดเซฟหลัก
+                            update_settings_db(
+                                selected_manage_dept,
+                                cfg_range,
+                                selected_working_days,
+                                current_closed_dates,
+                                parsed_slots,
+                                cfg_capacity,
+                                final_slot_configs
+                            )
+                            st.session_state.toast_notification = {"message": f"เพิ่มวันหยุดพิเศษวันที่ {format_thai_date(new_closed_date)} สำเร็จ! 🛑", "icon": "✅"}
+                            st.rerun()
+                        else:
+                            st.warning("วันนี้อยู่ในรายการวันหยุดพิเศษอยู่แล้ว")
+                
+                with col_list_closed:
+                    st.write("รายการวันหยุดพิเศษปัจจุบัน:")
+                    if not current_closed_dates:
+                        st.caption("ไม่มีวันหยุดพิเศษ")
+                    else:
+                        for c_date_str in sorted(current_closed_dates):
+                            c_date = datetime.date.fromisoformat(c_date_str)
+                            col_c_text, col_c_btn = st.columns([3, 1])
+                            with col_c_text:
+                                st.write(f"🛑 {format_thai_date(c_date)}")
+                            with col_c_btn:
+                                if st.button("🗑️", key=f"del_closed_{selected_manage_dept}_{c_date_str}"):
+                                    current_closed_dates.remove(c_date_str)
+                                    # อัปเดต DB ทันที
+                                    update_settings_db(
+                                        selected_manage_dept,
+                                        cfg_range,
+                                        selected_working_days,
+                                        current_closed_dates,
+                                        parsed_slots,
+                                        cfg_capacity,
+                                        final_slot_configs
+                                    )
+                                    st.session_state.toast_notification = {"message": "นำวันหยุดพิเศษออกแล้ว! 🗑️", "icon": "✅"}
+                                    st.rerun()
+                                    
+                st.divider()
+                
+                # ปุ่มบันทึกข้อมูลหลัก
+                if st.button("💾 บันทึกการตั้งค่าตารางและวันให้บริการของแผนก", key=f"btn_save_settings_{selected_manage_dept}", type="primary", use_container_width=True):
+                    if not selected_working_days:
+                        st.error("❌ ต้องเลือกวันเปิดทำการประจำสัปดาห์อย่างน้อย 1 วัน")
+                    elif not parsed_slots:
+                        st.error("❌ ต้องมีช่วงเวลาเปิดให้บริการอย่างน้อย 1 สล็อตเวลา")
+                    else:
+                        success, message = update_settings_db(
+                            selected_manage_dept,
+                            cfg_range,
+                            selected_working_days,
+                            current_closed_dates,
+                            parsed_slots,
+                            cfg_capacity,
+                            final_slot_configs
+                        )
+                        if success:
+                            if state_slots_key in st.session_state:
+                                del st.session_state[state_slots_key]
+                            st.session_state.toast_notification = {"message": f"บันทึกการตั้งค่าตารางและวันให้บริการของ {manage_dept} สำเร็จ! 💾", "icon": "✅"}
+                            st.rerun()
+                        else:
+                            st.error(f"❌ {message}")
+                            
+            with subtab_gcal:
+                st.write(f"#### 📅 ตั้งค่าการเชื่อมโยง Google Calendar ของ {manage_dept}")
+                
+                dept_settings = get_settings(selected_manage_dept)
+                dept_cal_id = dept_settings.get("gcal_calendar_id", "")
+                
+                with st.form(f"gcal_config_form_{selected_manage_dept}"):
+                    new_cal_id = st.text_input(
+                        "Google Calendar ID ของแผนก:",
+                        value=dept_cal_id,
+                        placeholder="เช่น xxxxxxxx@group.calendar.google.com"
+                    )
+                    
+                    save_gcal_submitted = st.form_submit_button("💾 บันทึกรหัสปฏิทิน Google Calendar ของแผนก", use_container_width=True)
+                    if save_gcal_submitted:
+                        success, message = update_settings_db(
+                            selected_manage_dept,
+                            booking_range_days=dept_settings.get("booking_range_days", 30),
+                            working_days=dept_settings.get("working_days", [0, 1, 2, 3, 4]),
+                            closed_dates=dept_settings.get("closed_dates", []),
+                            time_slots=dept_settings.get("time_slots", []),
+                            max_bookings_per_slot=dept_settings.get("max_bookings_per_slot", 1),
+                            slot_configs=dept_settings.get("slot_configs", []),
+                            display_name=dept_settings.get("display_name"),
+                            theme_color=dept_settings.get("theme_color"),
+                            banner_img=dept_settings.get("banner_img"),
+                            gcal_calendar_id=new_cal_id.strip()
+                        )
+                        if success:
+                            st.session_state.toast_notification = {"message": f"บันทึกรหัสปฏิทิน Google Calendar ของ {manage_dept} สำเร็จ! 📅", "icon": "✅"}
+                            st.rerun()
+                        else:
+                            st.error(f"❌ {message}")
+                
+                if dept_cal_id:
+                    st.success(f"🟢 ปฏิทินที่เชื่อมโยงในปัจจุบัน: `{dept_cal_id}`")
+                    st.caption("💡 คนไข้ที่ลงนัดหมายในแผนกนี้ จะสามารถบันทึกนัดหมายลงในปฏิทินกลางของแผนกนี้โดยอัตโนมัติ")
+                else:
+                    st.warning("⚠️ แผนกนี้ยังไม่ได้ตั้งค่า Google Calendar ID เฉพาะ (จะใช้ปฏิทินเริ่มต้นของผู้ใช้)")
+                    
+                st.markdown("""
+                ---
+                **⚙️ วิธีการตั้งค่าปฏิทินแยกตามแผนก:**
+                1. ล็อกอินเข้าสู่บัญชี Google ของแผนก หรือใช้บัญชี รพ.สต.
+                2. ไปที่ **Google Calendar** และกด **"สร้างปฏิทินใหม่"** (Create new calendar) ตั้งชื่อให้สอดคล้องกับแผนก เช่น *ทันตกรรม สสจ.สระแก้ว*
+                3. ไปที่การตั้งค่าปฏิทินนั้น และทำเครื่องหมายถูกที่ **"แชร์แบบสาธิต/เปิดเผยต่อสาธารณะ"** (Make available to public) เพื่อให้ผู้รับบริการภายนอกสามารถเปิดเข้าถึงได้
+                4. เลื่อนลงมาที่หัวข้อ **"รวมปฏิทิน"** (Integrate calendar) คัดลอก **รหัสปฏิทิน (Calendar ID)** เช่น:
+                   `xxxxxxxxxxxxxxxx@group.calendar.google.com`
+                """)
+
+        # --- TAB 5: MANAGE DEPARTMENTS ---
+        with tab_depts:
+            st.write("### 🏥 จัดการแผนกบริการ (เพิ่ม / แก้ไข / ลบ)")
+            
+            if "dept_admin_logged_in" not in st.session_state:
+                st.session_state.dept_admin_logged_in = False
+                
+            if not st.session_state.dept_admin_logged_in:
+                col_admin_left, col_admin_mid, col_admin_right = st.columns([1, 2, 1])
+                with col_admin_mid:
+                    st.markdown("""
+                    <div style="background-color: #FFF2E6; padding: 1.5rem; border-radius: 12px; border-top: 4px solid #FF9F1C; text-align: center; margin-bottom: 1.5rem;">
+                        <h4 style="color: #FF9F1C; margin: 0; font-weight: 700;">🔒 พื้นที่ป้องกันเฉพาะผู้ดูแลระบบหลัก</h4>
+                        <p style="font-size: 0.85rem; color: #666; margin-top: 5px; margin-bottom: 0;">กรุณายืนยันรหัสผ่านควบคุมเพื่อตั้งค่าหรือจัดการแผนกบริการ</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    admin_passcode = st.text_input("ป้อนรหัสผ่านเพื่อเข้าใช้งานหน้าจัดการแผนกบริการ:", type="password", key="admin_dept_pass_input")
+                    if st.button("ยืนยันรหัสผ่านผู้ดูแลระบบ 🔑", use_container_width=True, key="btn_confirm_admin_dept"):
+                        if admin_passcode.strip() == "IyD{Nfoyp02":
+                            st.session_state.dept_admin_logged_in = True
+                            st.success("สิทธิ์ผู้ดูแลระบบหลักถูกต้อง กำลังเปิดหน้าจัดการแผนก...")
+                            st.rerun()
+                        else:
+                            st.error("❌ รหัสผ่านไม่ถูกต้อง กรุณาป้อนรหัสผ่านที่ถูกต้อง")
+            else:
+                col_title_dept, col_logout_dept = st.columns([3, 1])
+                with col_logout_dept:
+                    if st.button("🔒 ล็อกหน้าจัดการแผนก", use_container_width=True, key="btn_logout_dept_admin"):
+                        st.session_state.dept_admin_logged_in = False
+                        st.rerun()
+
+                depts_in_db = fetch_all_departments()
+                
+                sub_dept_list, sub_dept_add, sub_dept_edit, sub_dept_delete = st.tabs([
+                    "📋 รายการแผนกบริการในปัจจุบัน",
+                    "➕ เพิ่มแผนกใหม่",
+                    "✏️ แก้ไขแผนกที่มีอยู่",
+                    "🗑️ ลบแผนกออกจากระบบ"
+                ])
+                
+                with sub_dept_list:
+                    st.write("#### รายชื่อแผนกที่เปิดให้บริการผ่านไลน์")
+                    if not depts_in_db:
+                        st.info("ไม่มีแผนกในระบบในขณะนี้")
+                    else:
+                        for d in depts_in_db:
+                            st.markdown(f"""
+                            <div style="padding: 1rem; border-left: 5px solid {d['theme_color']}; background-color: #F8F9FA; border-radius: 8px; margin-bottom: 10px; display: flex; align-items: center; justify-content: space-between;">
+                                <div style="display: flex; align-items: center; gap: 15px;">
+                                    <img src="{d['banner_img']}" width="40">
+                                    <div>
+                                        <strong style="font-size: 1.1rem; color: #240046;">{d['display_name']}</strong><br>
+                                        <span style="font-size: 0.85rem; color: #6C757D;">รหัสอ้างอิง: <code>{d['key']}</code> | รหัสสี: <span style="color: {d['theme_color']}; font-weight: bold;">{d['theme_color']}</span></span>
+                                    </div>
+                                </div>
+                            </div>
+                            """, unsafe_allow_html=True)
+                            
+                with sub_dept_add:
+                    st.write("#### ➕ เพิ่มแผนกบริการใหม่")
+                    with st.form("add_dept_form"):
+                        new_dept_key = st.text_input(
+                            "รหัสแผนกภาษาอังกฤษ (เช่น pediatrics, general_medicine):", 
+                            placeholder="ห้ามมีช่องว่าง ใช้ภาษาอังกฤษตัวเล็กเท่านั้น"
+                        ).strip().lower()
+                        
+                        new_dept_name = st.text_input(
+                            "ชื่อแผนกบริการภาษาไทย (เช่น แผนกกุมารเวชกรรม, คลินิกโรคทั่วไป):", 
+                            placeholder="ระบุชื่อภาษาไทยที่แสดงให้คนไข้เห็น"
+                        )
+                        
+                        new_dept_color = st.color_picker("เลือกสีหลักของแผนก (Theme Color):", value="#7B2CBF")
+                        
+                        icon_options = {
+                            "🏥 โรงพยาบาล/บริการทั่วไป": "https://img.icons8.com/color/144/hospital.png",
+                            "🦷 ทันตกรรม (ฟัน)": "https://img.icons8.com/color/144/tooth.png",
+                            "🍃 แพทย์แผนไทย (ครกสมุนไพร)": "https://img.icons8.com/color/144/mortar-and-pestle.png",
+                            "♿ กายภาพบำบัด (วีลแชร์)": "https://img.icons8.com/color/144/physical-therapy.png",
+                            "💉 วัคซีน (เข็มฉีดยา)": "https://img.icons8.com/color/144/syringe.png",
+                            "💊 ร้านขายยา/เภสัช": "https://img.icons8.com/color/144/pill.png",
+                            "❤️ หัวใจ/ตรวจสุขภาพ": "https://img.icons8.com/color/144/heart-monitor.png"
+                        }
+                        
+                        selected_preset = st.selectbox("เลือกไอคอนแผนกจากรายการแนะนำ:", list(icon_options.keys()))
+                        custom_dept_img = st.text_input(
+                            "หรือระบุ URL รูปภาพไอคอนอื่นๆ (เว้นว่างไว้จะใช้ไอคอนแนะนำที่เลือกด้านบน):",
+                            placeholder="https://..."
+                        ).strip()
+                        
+                        add_dept_submitted = st.form_submit_button("➕ บันทึกแผนกใหม่", use_container_width=True)
+                        if add_dept_submitted:
+                            final_img = custom_dept_img if custom_dept_img else icon_options[selected_preset]
+                            if not new_dept_key or not new_dept_name:
+                                st.error("❌ กรุณากรอกรหัสแผนกและชื่อแผนกบริการให้ครบถ้วน")
+                            elif not new_dept_key.isalnum() and "_" not in new_dept_key:
+                                st.error("❌ รหัสแผนกต้องประกอบด้วยตัวอักษรภาษาอังกฤษหรือตัวเลข และเครื่องหมาย _ เท่านั้น")
+                            else:
+                                success, message = create_department_db(new_dept_key, new_dept_name, new_dept_color, final_img)
+                                if success:
+                                    st.session_state.toast_notification = {"message": f"เพิ่มแผนก '{new_dept_name}' ใหม่สำเร็จ! 🏥", "icon": "✅"}
+                                    st.rerun()
+                                else:
+                                    st.error(f"❌ {message}")
+                                    
+                with sub_dept_edit:
+                    st.write("#### ✏️ แก้ไขแผนกบริการที่มีอยู่")
+                    if not depts_in_db:
+                        st.info("ไม่มีแผนกให้แก้ไขในระบบ")
+                    else:
+                        edit_dept_options = {f"{d['display_name']} ({d['key']})": d for d in depts_in_db}
+                        selected_edit_label = st.selectbox(
+                            "เลือกแผนกที่ต้องการแก้ไข:",
+                            list(edit_dept_options.keys()),
+                            key="sb_edit_dept_select"
+                        )
+                        selected_edit_dept = edit_dept_options[selected_edit_label]
+                        
+                        with st.form("edit_dept_form"):
+                            edit_dept_name = st.text_input(
+                                "ชื่อแผนกบริการภาษาไทย:", 
+                                value=selected_edit_dept.get("display_name", "")
+                            )
+                            edit_dept_color = st.color_picker(
+                                "สีธีมหลักของแผนก:", 
+                                value=selected_edit_dept.get("theme_color", "#7B2CBF")
+                            )
+                            edit_dept_img = st.text_input(
+                                "ลิงก์ URL รูปภาพไอคอนแผนก:", 
+                                value=selected_edit_dept.get("banner_img", "")
+                            )
+                            
+                            edit_dept_submitted = st.form_submit_button("✏️ บันทึกการแก้ไขแผนก", use_container_width=True)
+                            if edit_dept_submitted:
+                                if not edit_dept_name.strip():
+                                    st.error("❌ กรุณากรอกชื่อแผนกบริการ")
+                                else:
+                                    success, message = update_department_db(
+                                        selected_edit_dept["key"],
+                                        edit_dept_name.strip(),
+                                        edit_dept_color,
+                                        edit_dept_img.strip()
+                                    )
+                                    if success:
+                                        st.session_state.toast_notification = {"message": f"แก้ไขแผนก '{edit_dept_name.strip()}' เรียบร้อยแล้ว! ✏️", "icon": "✅"}
+                                        st.rerun()
+                                    else:
+                                        st.error(f"❌ {message}")
+                                        
+                with sub_dept_delete:
+                    st.write("#### 🗑️ ลบแผนกออกจากระบบ")
+                    if not depts_in_db:
+                        st.info("ไม่มีแผนกให้ลบในขณะนี้")
+                    else:
+                        del_dept_options = {f"{d['display_name']} ({d['key']})": d for d in depts_in_db}
+                        selected_del_label = st.selectbox(
+                            "เลือกแผนกที่ต้องการลบ:",
+                            list(del_dept_options.keys()),
+                            key="sb_del_dept_select"
+                        )
+                        selected_del_dept = del_dept_options[selected_del_label]
+                        
+                        st.warning(f"⚠️ การดำเนินการนี้จะลบแผนก '{selected_del_dept['display_name']}' ออกจากตารางตั้งค่า และจะลบข้อมูลบริการรักษาทั้งหมดที่เกี่ยวข้องกับแผนกนี้! โปรดตรวจสอบให้แน่ใจก่อนทำการลบ")
+                        
+                        confirm_del_text = st.text_input(
+                            f"พิมพ์คำว่า `{selected_del_dept['key']}` ในช่องด้านล่างเพื่อยืนยันสิทธิ์การลบ:",
+                            placeholder="พิมพ์เพื่อยืนยัน"
+                        ).strip().lower()
+                        
+                        if st.button("🗑️ ยืนยันการลบแผนกบริการ", type="primary", use_container_width=True):
+                            if confirm_del_text != selected_del_dept['key']:
+                                st.error("❌ คำยืนยันไม่ถูกต้อง กรุณากรอกรหัสแผนกบริการให้ตรงกัน")
+                            else:
+                                success, message = delete_department_db(selected_del_dept['key'])
+                                if success:
+                                    st.session_state.toast_notification = {"message": f"ลบแผนก '{selected_del_dept['display_name']}' ออกจากระบบสำเร็จ! 🗑️", "icon": "✅"}
+                                    st.rerun()
+                                else:
+                                    st.error(f"❌ {message}")
+
+        # --- TAB 6: MANAGE DOCTORS ---
+        with tab_doctors:
+            st.write("### 🩺 จัดการข้อมูลแพทย์และผู้ให้บริการ")
+            
+            doctors_in_db = fetch_doctors()
+            depts_in_db = fetch_all_departments()
+            
+            sub_doc_list, sub_doc_add, sub_doc_edit, sub_doc_delete = st.tabs([
+                "📋 รายชื่อแพทย์ปัจจุบัน",
+                "➕ เพิ่มแพทย์ใหม่",
+                "✏️ แก้ไขข้อมูลแพทย์",
+                "🗑️ ลบแพทย์ออกจากระบบ"
+            ])
+            
+            with sub_doc_list:
+                st.write("#### รายชื่อแพทย์ผู้ให้บริการในระบบ")
+                if not doctors_in_db:
+                    st.info("ไม่มีรายชื่อแพทย์ในระบบในขณะนี้")
+                else:
+                    for doc in doctors_in_db:
+                        # วันปฏิบัติงาน
+                        thai_days = ["จันทร์", "อังคาร", "พุธ", "พฤหัสบดี", "ศุกร์", "เสาร์", "อาทิตย์"]
+                        days_worked = ", ".join([thai_days[d] for d in doc.get("working_days", [])])
+                        
+                        # บริการที่ให้การรักษา
+                        linked_serv_ids = doc.get("services_linked", [])
+                        dept_services = fetch_services(doc["department"])
+                        linked_serv_titles = []
+                        if linked_serv_ids:
+                            linked_serv_titles = [s.get("title", "") for s in dept_services if s.get("id") in linked_serv_ids]
+                        if not linked_serv_titles:
+                            linked_serv_titles = ["ทุกบริการรักษาในแผนก"]
+                        
+                        # สีตามแผนก
+                        dept_color = "#6C757D"
+                        dept_name_str = doc["department"]
+                        if depts_in_db:
+                            for d in depts_in_db:
+                                if d["key"] == doc["department"]:
+                                    dept_color = d["theme_color"]
+                                    dept_name_str = d["display_name"]
+                                    break
+                                    
+                        st.markdown(f"""
+                        <div style="padding: 1.2rem; border-left: 5px solid {dept_color}; background-color: #F8F9FA; border-radius: 8px; margin-bottom: 10px;">
+                            <div style="display: flex; align-items: flex-start; justify-content: space-between;">
+                                <div>
+                                    <strong style="font-size: 1.15rem; color: #1E293B;">{doc['name']}</strong> 
+                                    <span style="font-size: 0.8rem; background-color: {dept_color}33; color: {dept_color}; padding: 2px 6px; border-radius: 4px; font-weight: bold; margin-left: 8px;">แผนก{dept_name_str}</span><br>
+                                    <p style="margin: 6px 0 2px 0; font-size: 0.88rem; color: #475569;"><b>วันออกตรวจ:</b> {days_worked}</p>
+                                    <p style="margin: 0 0 2px 0; font-size: 0.85rem; color: #64748B;"><b>เวลาปฏิบัติงาน:</b> {", ".join(doc.get("working_hours", []))} น.</p>
+                                    <p style="margin: 0; font-size: 0.85rem; color: #475569;"><b>บริการที่ตรวจรักษา:</b> {", ".join(linked_serv_titles)}</p>
+                                </div>
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                        
+            with sub_doc_add:
+                st.write("#### ➕ เพิ่มแพทย์คนใหม่เข้าระบบ")
+                if not depts_in_db:
+                    st.warning("⚠️ กรุณาเพิ่มแผนกบริการก่อนเพิ่มแพทย์")
+                else:
+                    with st.form("add_doc_form"):
+                        new_doc_name = st.text_input("ชื่อ-นามสกุลแพทย์ (เช่น ทันตแพทย์สมศักดิ์ รักดี):", placeholder="ระบุคำนำหน้าและชื่อนามสกุล")
+                        new_doc_dept = st.selectbox(
+                            "แผนกบริการประจำแพทย์:",
+                            [d["display_name"] for d in depts_in_db]
+                        )
+                        selected_dept_key = depts_in_db[[d["display_name"] for d in depts_in_db].index(new_doc_dept)]["key"]
+                        
+                        st.write("**📅 กำหนดวันปฏิบัติงาน (Working Days):**")
+                        cols_days = st.columns(7)
+                        days_dict = {"จันทร์": 0, "อังคาร": 1, "พุธ": 2, "พฤหัสบดี": 3, "ศุกร์": 4, "เสาร์": 5, "อาทิตย์": 6}
+                        selected_days = []
+                        for idx, (day_name, day_val) in enumerate(days_dict.items()):
+                            if cols_days[idx].checkbox(day_name, value=True if day_val < 5 else False, key=f"add_doc_day_{day_val}"):
+                                selected_days.append(day_val)
+                                
+                        st.write("**⏰ กำหนดรอบเวลานัดหมายที่แพทย์ตรวจรักษา (Working Hours):**")
+                        preset_slots = ["08:30", "09:00", "09:30", "10:00", "10:30", "11:00", "11:30", "13:00", "13:30", "14:00", "14:30", "15:00", "15:30", "16:00"]
+                        cols_slots = st.columns(4)
+                        selected_slots = []
+                        for idx, time_slot in enumerate(preset_slots):
+                            col_c = cols_slots[idx % 4]
+                            if col_c.checkbox(time_slot, value=True if time_slot in ["09:00", "09:30", "10:00", "13:30", "14:00", "14:30"] else False, key=f"add_doc_slot_{time_slot}"):
+                                selected_slots.append(time_slot)
+                                
+                        dept_services = fetch_services(selected_dept_key)
+                        st.write("**🔗 เชื่อมโยงบริการที่แพทย์คนนี้ให้บริการรักษา:**")
+                        selected_services = []
+                        if not dept_services:
+                            st.caption("ไม่มีบริการพิเศษเฉพาะในแผนกนี้ (แพทย์จะให้บริการทุกประเภทในแผนกโดยอัตโนมัติ)")
+                        else:
+                            for s in dept_services:
+                                if st.checkbox(f"{s.get('icon', '🩺')} {s.get('title')}", value=True, key=f"add_doc_service_{s.get('id')}"):
+                                    selected_services.append(s.get("id"))
+                                    
+                        add_doc_submitted = st.form_submit_button("➕ บันทึกข้อมูลแพทย์ใหม่", use_container_width=True)
+                        if add_doc_submitted:
+                            if not new_doc_name.strip():
+                                st.error("❌ กรุณากรอกชื่อแพทย์")
+                            elif not selected_days:
+                                st.error("❌ กรุณาเลือกวันทำงานอย่างน้อย 1 วัน")
+                            elif not selected_slots:
+                                st.error("❌ กรุณาเลือกเวลาตรวจอย่างน้อย 1 รอบ")
+                            else:
+                                success, message = add_doctor_db(
+                                    new_doc_name.strip(),
+                                    selected_dept_key,
+                                    selected_days,
+                                    sorted(selected_slots),
+                                    selected_services
+                                )
+                                if success:
+                                    st.session_state.toast_notification = {"message": f"เพิ่มแพทย์ '{new_doc_name.strip()}' เรียบร้อยแล้ว! 🩺", "icon": "✅"}
+                                    st.rerun()
+                                else:
+                                    st.error(f"❌ {message}")
+                                    
+            with sub_doc_edit:
+                st.write("#### ✏️ แก้ไขรายละเอียดข้อมูลแพทย์")
+                if not doctors_in_db:
+                    st.info("ไม่มีรายชื่อแพทย์ให้แก้ไขในระบบ")
+                else:
+                    edit_doc_options = {f"{doc['name']} (แผนก{doc['department']})": doc for doc in doctors_in_db}
+                    selected_edit_doc_label = st.selectbox(
+                        "เลือกแพทย์ที่ต้องการแก้ไข:",
+                        list(edit_doc_options.keys()),
+                        key="sb_edit_doc_select"
+                    )
+                    selected_edit_doc = edit_doc_options[selected_edit_doc_label]
+                    
+                    with st.form("edit_doc_form"):
+                        edit_doc_name = st.text_input("ชื่อ-นามสกุลแพทย์:", value=selected_edit_doc.get("name", ""))
+                        
+                        edit_doc_dept = st.selectbox(
+                            "แผนกประจำของแพทย์:",
+                            [d["display_name"] for d in depts_in_db],
+                            index=[d["key"] for d in depts_in_db].index(selected_edit_doc.get("department")) if depts_in_db and selected_edit_doc.get("department") in [d["key"] for d in depts_in_db] else 0
+                        )
+                        edit_dept_key = depts_in_db[[d["display_name"] for d in depts_in_db].index(edit_doc_dept)]["key"]
+                        
+                        st.write("**📅 กำหนดวันปฏิบัติงาน (Working Days):**")
+                        cols_edit_days = st.columns(7)
+                        edit_days_dict = {"จันทร์": 0, "อังคาร": 1, "พุธ": 2, "พฤหัสบดี": 3, "ศุกร์": 4, "เสาร์": 5, "อาทิตย์": 6}
+                        edit_selected_days = []
+                        for idx, (day_name, day_val) in enumerate(edit_days_dict.items()):
+                            day_present = day_val in selected_edit_doc.get("working_days", [])
+                            if cols_edit_days[idx].checkbox(day_name, value=day_present, key=f"edit_doc_day_{day_val}"):
+                                edit_selected_days.append(day_val)
+                                
+                        st.write("**⏰ กำหนดรอบเวลานัดหมายที่แพทย์ตรวจรักษา (Working Hours):**")
+                        cols_edit_slots = st.columns(4)
+                        edit_selected_slots = []
+                        for idx, time_slot in enumerate(preset_slots):
+                            col_c = cols_edit_slots[idx % 4]
+                            slot_present = time_slot in selected_edit_doc.get("working_hours", [])
+                            if col_c.checkbox(time_slot, value=slot_present, key=f"edit_doc_slot_{time_slot}"):
+                                edit_selected_slots.append(time_slot)
+                                
+                        edit_dept_services = fetch_services(edit_dept_key)
+                        st.write("**🔗 เชื่อมโยงบริการที่แพทย์คนนี้ให้บริการรักษา:**")
+                        edit_selected_services = []
+                        if not edit_dept_services:
+                            st.caption("ไม่มีบริการพิเศษเฉพาะในแผนกนี้")
+                        else:
+                            for s in edit_dept_services:
+                                serv_present = s.get("id") in selected_edit_doc.get("services_linked", [])
+                                if st.checkbox(f"{s.get('icon', '🩺')} {s.get('title')}", value=serv_present, key=f"edit_doc_service_{s.get('id')}"):
+                                    edit_selected_services.append(s.get("id"))
+                                    
+                        edit_doc_submitted = st.form_submit_button("✏️ บันทึกการแก้ไขข้อมูลแพทย์", use_container_width=True)
+                        if edit_doc_submitted:
+                            if not edit_doc_name.strip():
+                                st.error("❌ กรุณากรอกชื่อแพทย์")
+                            elif not edit_selected_days:
+                                st.error("❌ กรุณาเลือกวันทำงานอย่างน้อย 1 วัน")
+                            elif not edit_selected_slots:
+                                st.error("❌ กรุณาเลือกเวลาตรวจอย่างน้อย 1 รอบ")
+                            else:
+                                success, message = update_doctor_db(
+                                    selected_edit_doc["id"],
+                                    edit_doc_name.strip(),
+                                    edit_dept_key,
+                                    edit_selected_days,
+                                    sorted(edit_selected_slots),
+                                    edit_selected_services
+                                )
+                                if success:
+                                    st.session_state.toast_notification = {"message": f"แก้ไขข้อมูลแพทย์ '{edit_doc_name.strip()}' สำเร็จ! ✏️", "icon": "✅"}
+                                    st.rerun()
+                                else:
+                                    st.error(f"❌ {message}")
+                                    
+            with sub_doc_delete:
+                st.write("#### 🗑️ ลบแพทย์ออกจากระบบบริการ")
+                if not doctors_in_db:
+                    st.info("ไม่มีรายชื่อแพทย์ให้ลบในขณะนี้")
+                else:
+                    del_doc_options = {f"{doc['name']} (แผนก{doc['department']})": doc for doc in doctors_in_db}
+                    selected_del_doc_label = st.selectbox(
+                        "เลือกแพทย์ที่ต้องการลบ:",
+                        list(del_doc_options.keys()),
+                        key="sb_del_doc_select"
+                    )
+                    selected_del_doc = del_doc_options[selected_del_doc_label]
+                    
+                    st.warning(f"⚠️ คุณต้องการลบข้อมูลการออกตรวจของแพทย์ '{selected_del_doc['name']}' หรือไม่? (ประวัติการนัดหมายเดิมจะยังคงอยู่ แต่สิทธิ์และตารางออกตรวจใหม่จะถูกยกเลิก)")
+                    
+                    if st.button("🗑️ ยืนยันการลบแพทย์คนนี้ออก", type="primary", use_container_width=True):
+                        success, message = delete_doctor_db(selected_del_doc["id"])
+                        if success:
+                            st.session_state.toast_notification = {"message": f"ลบข้อมูลแพทย์ '{selected_del_doc['name']}' สำเร็จ! 🗑️", "icon": "✅"}
+                            st.rerun()
+                        else:
+                            st.error(f"❌ {message}")
+
+        # --- TAB 7: CREDENTIALS MANAGER ---
+        with tab_credentials:
+            st.write("### 🔑 ตั้งค่าคีย์และการเชื่อมต่อระบบ (System Credentials)")
+            
+            if "cred_admin_logged_in" not in st.session_state:
+                st.session_state.cred_admin_logged_in = False
+                
+            if not st.session_state.cred_admin_logged_in:
+                col_c_left, col_c_mid, col_c_right = st.columns([1, 2, 1])
+                with col_c_mid:
+                    st.markdown("""
+                    <div style="background-color: #F8F9FA; padding: 1.5rem; border-radius: 12px; border-top: 4px solid #7B2CBF; text-align: center; margin-bottom: 1.5rem;">
+                        <h4 style="color: #7B2CBF; margin: 0; font-weight: 700;">🔒 พื้นที่ป้องกันเฉพาะผู้ดูแลระบบคีย์</h4>
+                        <p style="font-size: 0.85rem; color: #666; margin-top: 5px; margin-bottom: 0;">กรุณายืนยันรหัสผ่านผู้ดูแลระบบเพื่อดูและแก้ไขคีย์การเชื่อมต่อ</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    cred_passcode = st.text_input("ป้อนรหัสผ่านเพื่อตั้งค่าการเชื่อมต่อระบบ:", type="password", key="cred_pass_input")
+                    if st.button("ยืนยันรหัสผ่านคีย์ 🔑", use_container_width=True, key="btn_confirm_cred"):
+                        if cred_passcode.strip() == "IyD{Nfoyp02":
+                            st.session_state.cred_admin_logged_in = True
+                            st.success("สิทธิ์ผู้ดูแลระบบคีย์ถูกต้อง...")
+                            st.rerun()
+                        else:
+                            st.error("❌ รหัสผ่านไม่ถูกต้อง")
+            else:
+                col_title_cred, col_logout_cred = st.columns([3, 1])
+                with col_logout_cred:
+                    if st.button("🔒 ล็อกหน้าจัดการคีย์", use_container_width=True, key="btn_logout_cred_admin"):
+                        st.session_state.cred_admin_logged_in = False
+                        st.rerun()
+
+                st.write("##### ⚙️ ดึงข้อมูลและอัปเดตไฟล์คอนฟิก `secrets.toml` ในตัวระบบ")
+                
+                curr_sb_url = st.secrets.get("SUPABASE_URL", "")
+                curr_sb_key = st.secrets.get("SUPABASE_KEY", "")
+                curr_liff_id = st.secrets.get("LINE_LIFF_ID", "")
+                curr_line_token = st.secrets.get("LINE_CHANNEL_ACCESS_TOKEN", "")
+                curr_staff_pass = st.secrets.get("STAFF_PASSWORD", "9091")
+                
+                active_depts = fetch_all_departments()
+                curr_cal_ids = {}
+                for dept in active_depts:
+                    curr_cal_ids[dept["key"]] = get_calendar_id(dept["key"])
+                
+                curr_gcal_creds = st.secrets.get("google_calendar_credentials", {})
+                if isinstance(curr_gcal_creds, dict):
+                    curr_project_id = curr_gcal_creds.get("project_id", "")
+                    curr_private_key_id = curr_gcal_creds.get("private_key_id", "")
+                    curr_private_key = curr_gcal_creds.get("private_key", "")
+                    curr_client_email = curr_gcal_creds.get("client_email", "")
+                    curr_client_id = curr_gcal_creds.get("client_id", "")
+                else:
+                    curr_project_id = getattr(curr_gcal_creds, "project_id", "")
+                    curr_private_key_id = getattr(curr_gcal_creds, "private_key_id", "")
+                    curr_private_key = getattr(curr_gcal_creds, "private_key", "")
+                    curr_client_email = getattr(curr_gcal_creds, "client_email", "")
+                    curr_client_id = getattr(curr_gcal_creds, "client_id", "")
+
+                st.markdown("**📂 อัปโหลดไฟล์ Google Service Account JSON**")
+                st.info("💡 นำไฟล์ `.json` ที่ดาวน์โหลดจาก Google Cloud Console มาอัปโหลดที่นี่ ระบบจะดึงค่าคอนฟิกไปใส่ในช่องกรอกด้านล่างให้อัตโนมัติ")
+                
+                uploaded_file = st.file_uploader("เลือกไฟล์ JSON คีย์ Google Service Account:", type=["json"])
+                if uploaded_file is not None:
+                    try:
+                        import json
+                        gcal_json_data = json.load(uploaded_file)
+                        
+                        st.session_state["gcal_project_id_input"] = gcal_json_data.get("project_id", "")
+                        st.session_state["gcal_private_key_id_input"] = gcal_json_data.get("private_key_id", "")
+                        st.session_state["gcal_private_key_input"] = gcal_json_data.get("private_key", "")
+                        st.session_state["gcal_client_email_input"] = gcal_json_data.get("client_email", "")
+                        st.session_state["gcal_client_id_input"] = gcal_json_data.get("client_id", "")
+                        
+                        st.success("✅ อ่านข้อมูลจากไฟล์ JSON และใส่ในช่องกรอกข้อมูลสำเร็จแล้ว! (อย่าลืมกดบันทึกการตั้งค่าด้านล่าง)")
+                    except Exception as e:
+                        st.error(f"❌ เกิดข้อผิดพลาดในการอ่านไฟล์ JSON: {e}")
+
+                with st.form("credentials_form"):
+                    st.write("---")
+                    st.markdown("#### 1. 🗄️ การตั้งค่า Supabase Database")
+                    sb_url_input = st.text_input("Supabase Project URL:", value=curr_sb_url)
+                    sb_key_input = st.text_input("Supabase API Key (Anon/Service Role Key):", value=curr_sb_key, type="password")
+                    
+                    st.markdown("#### 2. 💬 การตั้งค่า LINE Platform")
+                    liff_id_input = st.text_input("LINE LIFF ID:", value=curr_liff_id)
+                    line_token_input = st.text_area("LINE Channel Access Token:", value=curr_line_token, height=100)
+                    
+                    st.markdown("#### 3. 📅 การตั้งค่า Google Calendar ID รายแผนก")
+                    if not active_depts:
+                        st.caption("ℹ️ ไม่มีแผนกอยู่ในระบบขณะนี้")
+                    cal_inputs = {}
+                    for dept in active_depts:
+                        cal_inputs[dept["key"]] = st.text_input(
+                            f"Google Calendar ID (แผนก{dept['display_name']}):",
+                            value=curr_cal_ids.get(dept["key"], ""),
+                            key=f"gcal_input_{dept['key']}"
+                        )
+                    
+                    st.markdown("#### 4. 🔑 รหัสผ่านเจ้าหน้าที่ทั่วไป")
+                    staff_pass_input = st.text_input("Staff Password (สำหรับเจ้าหน้าที่เข้าสู่ระบบหลังบ้าน):", value=curr_staff_pass, type="password")
+                    
+                    st.markdown("#### 5. 🤖 Google Calendar API (Service Account Credentials)")
+                    project_id_val = st.session_state.get("gcal_project_id_input", curr_project_id)
+                    private_key_id_val = st.session_state.get("gcal_private_key_id_input", curr_private_key_id)
+                    private_key_val = st.session_state.get("gcal_private_key_input", curr_private_key)
+                    client_email_val = st.session_state.get("gcal_client_email_input", curr_client_email)
+                    client_id_val = st.session_state.get("gcal_client_id_input", curr_client_id)
+                    
+                    gcal_project_id = st.text_input("Google Project ID:", value=project_id_val, key="gcal_project_id_field")
+                    gcal_private_key_id = st.text_input("Google Private Key ID:", value=private_key_id_val, key="gcal_private_key_id_field")
+                    gcal_private_key = st.text_area("Google Private Key (มีขึ้นต้น -----BEGIN PRIVATE KEY-----):", value=private_key_val, height=150, key="gcal_private_key_field")
+                    gcal_client_email = st.text_input("Google Client Email (Service Account):", value=client_email_val, key="gcal_client_email_field")
+                    gcal_client_id = st.text_input("Google Client ID:", value=client_id_val, key="gcal_client_id_field")
+                    
+                    st.warning("⚠️ การกดบันทึกจะเขียนทับไฟล์ `.streamlit/secrets.toml` และรีสตาร์ทตัวเชื่อมต่อภายในทันที")
+                    save_cred_submitted = st.form_submit_button("💾 บันทึกการเชื่อมต่อระบบ", type="primary", use_container_width=True)
+                    
+                    if save_cred_submitted:
+                        gcal_creds_dict = {
+                            "type": "service_account",
+                            "project_id": gcal_project_id.strip(),
+                            "private_key_id": gcal_private_key_id.strip(),
+                            "private_key": gcal_private_key.strip(),
+                            "client_email": gcal_client_email.strip(),
+                            "client_id": gcal_client_id.strip(),
+                            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                            "token_uri": "https://oauth2.googleapis.com/token",
+                            "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+                            "client_x509_cert_url": f"https://www.googleapis.com/robot/v1/metadata/x509/{urllib.parse.quote(gcal_client_email.strip())}",
+                            "universe_domain": "googleapis.com"
+                        }
+                        
+                        try:
+                            import os
+                            secrets_dir = r"E:\My Drive\Projact SKOMoph\line\ระบบจองนัดหมาย สสจ.สระแก้ว\.streamlit"
+                            secrets_path = os.path.join(secrets_dir, "secrets.toml")
+                            
+                            os.makedirs(secrets_dir, exist_ok=True)
+                            
+                            gcal_toml = "[google_calendar_credentials]\n"
+                            for k, v in gcal_creds_dict.items():
+                                if k == "private_key":
+                                    v_cleaned = v.replace("\\n", "\n") if "\\n" in v else v
+                                    gcal_toml += f'private_key = """{v_cleaned}"""\n'
+                                else:
+                                    gcal_toml += f'{k} = "{v}"\n'
+                                    
+                            gcal_ids_toml = "# Google Calendar Config (แยกตามแผนกบริการ)\n"
+                            for dept in active_depts:
+                                s_key = get_gcal_secret_key(dept["key"])
+                                gcal_ids_toml += f'{s_key} = "{cal_inputs[dept["key"]].strip()}"\n'
+
+                            toml_content = f"""# Supabase Configuration
+SUPABASE_URL = "{sb_url_input.strip()}"
+SUPABASE_KEY = "{sb_key_input.strip()}"
+
+# LINE Config
+LINE_LIFF_ID = "{liff_id_input.strip()}"
+LINE_CHANNEL_ACCESS_TOKEN = "{line_token_input.strip()}"
+
+# Staff Portal Config
+STAFF_PASSWORD = "{staff_pass_input.strip()}"
+
+{gcal_ids_toml}
+# คีย์รับรองความปลอดภัยสำหรับ Google Calendar API (Service Account)
+{gcal_toml}
+"""
+                            # 1. เขียนไฟล์ secrets.toml ในเครื่อง
+                            with open(secrets_path, "w", encoding="utf-8") as f:
+                                f.write(toml_content)
+                                
+                            # 2. อัปโหลดขึ้นตาราง system_config ใน Supabase เพื่อให้ GAS สามารถใช้คีย์ชุดเดียวกันนี้ดึงข้อมูลไปแสดงผล/ใช้ระบบหลังบ้าน
+                            if supabase_client:
+                                try:
+                                    # LINE Config
+                                    supabase_client.table("system_config").upsert({
+                                        "config_key": "LINE_LIFF_ID",
+                                        "config_value": liff_id_input.strip(),
+                                        "description": "LINE LIFF ID สำหรับใช้งาน LIFF"
+                                    }).execute()
+                                    
+                                    supabase_client.table("system_config").upsert({
+                                        "config_key": "LINE_CHANNEL_ACCESS_TOKEN",
+                                        "config_value": line_token_input.strip(),
+                                        "description": "LINE Channel Access Token สำหรับส่ง Flex Message"
+                                    }).execute()
+                                    
+                                    # Staff Password
+                                    supabase_client.table("system_config").upsert({
+                                        "config_key": "STAFF_PASSWORD",
+                                        "config_value": staff_pass_input.strip(),
+                                        "description": "รหัสผ่านสำหรับเจ้าหน้าที่เข้าหลังบ้าน"
+                                    }).execute()
+                                    
+                                    # Google Service Account JSON
+                                    import json
+                                    gcal_creds_str = json.dumps(gcal_creds_dict)
+                                    supabase_client.table("system_config").upsert({
+                                        "config_key": "GOOGLE_CALENDAR_CREDENTIALS",
+                                        "config_value": gcal_creds_str,
+                                        "description": "Google Service Account Credentials (JSON String)"
+                                    }).execute()
+                                    
+                                    # Calendar IDs
+                                    for dept in active_depts:
+                                        s_key = get_gcal_secret_key(dept["key"])
+                                        val = cal_inputs[dept["key"]].strip()
+                                        supabase_client.table("system_config").upsert({
+                                            "config_key": s_key,
+                                            "config_value": val,
+                                            "description": f"Google Calendar ID สำหรับแผนก {dept['display_name']}"
+                                        }).execute()
+                                        
+                                except Exception as db_err:
+                                    print(f"Error saving to system_config: {db_err}")
+                                    st.warning(f"⚠️ บันทึกลง secrets.toml สำเร็จ แต่ไม่สามารถเชื่อมโยงค่าไปยังฐานข้อมูลได้: {db_err}")
+                                
+                            st.session_state.toast_notification = {"message": "บันทึกการตั้งค่าการเชื่อมต่อลงไฟล์ secrets.toml และฐานข้อมูลเรียบร้อยแล้ว! 💾", "icon": "✅"}
+                            
+                            for key in ["gcal_project_id_input", "gcal_private_key_id_input", "gcal_private_key_input", "gcal_client_email_input", "gcal_client_id_input"]:
+                                if key in st.session_state:
+                                    del st.session_state[key]
+                                    
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"❌ เกิดข้อผิดพลาดในการเขียนไฟล์ Secrets: {e}")
+
+# ----------------- Footer -----------------
+st.divider()
+st.caption("ระบบลงทะเบียนนัดหมายออนไลน์ สสจ.สระแก้ว © 2026. พัฒนาร่วมกับ LINE Official Account")
