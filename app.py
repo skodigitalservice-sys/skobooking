@@ -2706,7 +2706,54 @@ def render_liff_login(liff_id):
 if app_mode == "ผู้รับบริการ (LINE LIFF)":
     # 1. LINE LIFF Login Integration
     render_liff_login(liff_id)
-    
+
+    # ============================================================
+    # แสดง banner สถานะการเชื่อมต่อ LINE OA ตั้งแต่หน้าแรก
+    # ============================================================
+    if not st.session_state.get("line_user_id", ""):
+        st.markdown("""
+        <div style="
+            background: linear-gradient(135deg, #FFF3CD 0%, #FFEEBA 100%);
+            border-left: 6px solid #FFC107;
+            border-radius: 12px;
+            padding: 1rem 1.2rem;
+            margin-bottom: 1.2rem;
+            display: flex;
+            align-items: flex-start;
+            gap: 0.8rem;
+            box-shadow: 0 2px 8px rgba(255,193,7,0.18);
+        ">
+            <span style="font-size:1.8rem; line-height:1;">⚠️</span>
+            <div>
+                <b style="color:#856404; font-size:1rem;">ยังไม่ได้เชื่อมต่อกับ LINE OA</b><br>
+                <span style="color:#856404; font-size:0.9rem;">
+                    คุณเปิดหน้านี้โดยตรง ไม่ใช่ผ่าน LINE Official Account<br>
+                    ระบบจะ<b>ไม่สามารถส่งข้อความยืนยันการนัดหมายกลับทาง LINE ให้คุณได้</b><br>
+                    กรุณาเปิดลิงก์นี้ผ่าน <b>LINE OA ของ สสจ.สระแก้ว</b> เพื่อรับการแจ้งเตือนนัดหมาย
+                </span>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.markdown(f"""
+        <div style="
+            background: linear-gradient(135deg, #D4EDDA 0%, #C3E6CB 100%);
+            border-left: 6px solid #28A745;
+            border-radius: 12px;
+            padding: 0.7rem 1.2rem;
+            margin-bottom: 1.2rem;
+            display: flex;
+            align-items: center;
+            gap: 0.8rem;
+            box-shadow: 0 2px 8px rgba(40,167,69,0.12);
+        ">
+            <span style="font-size:1.5rem;">✅</span>
+            <span style="color:#155724; font-size:0.9rem;">
+                <b>เชื่อมต่อ LINE OA เรียบร้อยแล้ว</b> — ระบบจะส่งข้อความยืนยันนัดหมายกลับทาง LINE ให้คุณโดยอัตโนมัติ
+            </span>
+        </div>
+        """, unsafe_allow_html=True)
+
     # ตรวจสอบการเรียกดูรายละเอียดการนัดหมาย
     view_app_id = st.query_params.get("app_id")
     if view_app_id:
