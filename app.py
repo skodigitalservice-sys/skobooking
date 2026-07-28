@@ -2724,35 +2724,43 @@ def render_liff_login(liff_id):
     <div id="liff-status" style="display:none;"></div>
     <script>
     (function() {{
-        // ตรวจว่า userId มีใน URL query string แล้วหรือยัง (จาก redirect ก่อนหน้า)
-        var urlParams = new URLSearchParams(window.location.search);
-        if (urlParams.get('userId')) {{
-            // มีแล้ว ไม่ต้อง init ซ้ำ
-            return;
-        }}
+        // NOTE: components.html() รันใน iframe ดังนั้นต้องใช้ window.top
+        // เพื่ออ่าน/เขียน URL ของหน้าหลัก (parent) ได้ถูกต้อง
+        try {{
+            var topLocation = window.top.location;
+            var urlParams = new URLSearchParams(topLocation.search);
 
-        liff.init({{ liffId: "{liff_id}" }}).then(function() {{
-            if (!liff.isLoggedIn()) {{
-                // ขอ login ผ่าน LINE — redirect กลับมาที่หน้านี้เอง
-                liff.login({{ redirectUri: window.location.href }});
-            }} else {{
-                liff.getProfile().then(function(profile) {{
-                    // สร้าง URL ใหม่พร้อม userId, displayName, pictureUrl
-                    var newUrl = new URL(window.location.href);
-                    newUrl.searchParams.set('userId', profile.userId);
-                    newUrl.searchParams.set('displayName', profile.displayName);
-                    if (profile.pictureUrl) {{
-                        newUrl.searchParams.set('pictureUrl', profile.pictureUrl);
-                    }}
-                    // Redirect เพื่อให้ Streamlit รับ query params ใหม่
-                    window.location.replace(newUrl.toString());
-                }}).catch(function(err) {{
-                    console.error('LIFF getProfile error:', err);
-                }});
+            // ถ้ามี userId ใน URL หน้าหลักแล้ว ไม่ต้อง init ซ้ำ
+            if (urlParams.get('userId')) {{
+                return;
             }}
-        }}).catch(function(err) {{
-            console.error('LIFF init error:', err);
-        }});
+
+            liff.init({{ liffId: "{liff_id}" }}).then(function() {{
+                if (!liff.isLoggedIn()) {{
+                    // ส่ง redirectUri เป็น URL หน้าหลัก ไม่ใช่ iframe
+                    liff.login({{ redirectUri: topLocation.href }});
+                }} else {{
+                    liff.getProfile().then(function(profile) {{
+                        // สร้าง URL ใหม่จาก URL หน้าหลักพร้อม userId, displayName, pictureUrl
+                        var newUrl = new URL(topLocation.href);
+                        newUrl.searchParams.set('userId', profile.userId);
+                        newUrl.searchParams.set('displayName', profile.displayName);
+                        if (profile.pictureUrl) {{
+                            newUrl.searchParams.set('pictureUrl', profile.pictureUrl);
+                        }}
+                        // Redirect หน้าหลัก (parent) เพื่อให้ Streamlit รับ query params ใหม่
+                        topLocation.replace(newUrl.toString());
+                    }}).catch(function(err) {{
+                        console.error('LIFF getProfile error:', err);
+                    }});
+                }}
+            }}).catch(function(err) {{
+                console.error('LIFF init error:', err);
+            }});
+        }} catch(e) {{
+            // กรณี cross-origin block (ไม่น่าเกิดใน Streamlit Cloud)
+            console.error('window.top access error:', e);
+        }}
     }})();
     </script>
     """, height=0)
