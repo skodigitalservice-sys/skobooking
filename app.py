@@ -237,7 +237,15 @@ def get_gcal_secret_key(dept_key):
     return mapping.get(dept_key, f"GOOGLE_CALENDAR_ID_{dept_key.upper()}")
 
 def get_calendar_id(dept):
-    """ดึงรหัส Google Calendar ID ของแผนกจากตารางการตั้งค่าฐานข้อมูล หรือ fallback ไปใช้จาก Secrets"""
+    """ดึงรหัส Google Calendar ID ของแผนก
+    ลำดับ fallback:
+    1. Supabase system_settings.gcal_calendar_id (ถ้าไม่ว่าง)
+    2. Supabase system_config (GOOGLE_CALENDAR_ID_DENTAL etc.)
+    3. st.secrets (secrets.toml)
+    4. google_calendar_id (ปฏิทินกลาง)
+    """
+    s_key = get_gcal_secret_key(dept)
+    
     try:
         if is_demo:
             if "settings" in st.session_state and dept in st.session_state.settings:
@@ -246,15 +254,31 @@ def get_calendar_id(dept):
                     return cal
         else:
             if supabase_client:
+                # 1. อ่านจาก system_settings (ตั้งค่าแผนก)
                 res = supabase_client.table("system_settings").select("gcal_calendar_id").eq("department", dept).execute()
                 if res.data and res.data[0].get("gcal_calendar_id"):
-                    return res.data[0]["gcal_calendar_id"]
+                    cal = res.data[0]["gcal_calendar_id"]
+                    print(f"[Calendar] {dept}: ใช้ ID จาก system_settings = {cal[:20]}...")
+                    return cal
     except Exception as e:
         print(f"Error fetching calendar id for {dept}: {e}")
-        
-    s_key = get_gcal_secret_key(dept)
+    
+    # 2. Supabase system_config (ผ่าน get_system_config)
     val = get_system_config(s_key)
-    return val if val else google_calendar_id
+    if val:
+        print(f"[Calendar] {dept}: ใช้ ID จาก system_config ({s_key}) = {val[:20]}...")
+        return val
+    
+    # 3. secrets.toml โดยตรง
+    secrets_val = st.secrets.get(s_key, "")
+    if secrets_val:
+        print(f"[Calendar] {dept}: ใช้ ID จาก secrets.toml ({s_key}) = {secrets_val[:20]}...")
+        return secrets_val
+    
+    # 4. fallback ปฏิทินกลาง
+    print(f"[Calendar] {dept}: ไม่พบ Calendar ID เฉพาะ ใช้ปฏิทินกลาง = {google_calendar_id[:20] if google_calendar_id else 'ไม่มี'}")
+    return google_calendar_id
+
 
 # Staff Portal Config / Google Calendar Service Account Credentials
 gcal_creds = {}
@@ -611,6 +635,12 @@ def get_settings(dept):
             time_slots = row.get("time_slots", ["08:30", "09:00", "09:30", "10:00", "13:30", "14:00", "14:30", "15:30", "16:00"])
             time_slots = [":".join(s.split(":")[:2]) for s in time_slots]
             
+            # fallback gcal_calendar_id จาก secrets ถ้า Supabase ว่าง
+            gcal_from_db = row.get("gcal_calendar_id", "")
+            if not gcal_from_db:
+                secret_key = get_gcal_secret_key(dept)
+                gcal_from_db = st.secrets.get(secret_key, "")
+
             return {
                 "booking_range_days": row.get("booking_range_days", 30),
                 "working_days": working_days,
@@ -621,7 +651,7 @@ def get_settings(dept):
                 "display_name": row.get("display_name"),
                 "theme_color": row.get("theme_color"),
                 "banner_img": row.get("banner_img"),
-                "gcal_calendar_id": row.get("gcal_calendar_id", "")
+                "gcal_calendar_id": gcal_from_db
             }
         else:
             # หากไม่มีให้เพิ่มค่าตั้งต้นเข้าไป
@@ -1087,12 +1117,16 @@ def get_queue_number(app_time):
         return 1
 
 def get_calendar_service():
-    """สร้าง Google Calendar API Service จากคีย์ลับใน secrets"""
-    creds_info = st.secrets.get("google_calendar_credentials", None)
+    """สร้าง Google Calendar API Service
+    ใช้ gcal_creds (ที่รวม fallback จาก Supabase DB และ Secrets ไว้แล้ว)
+    """
+    # ใช้ gcal_creds ที่ถูก resolve ไว้แล้ว (DB หรือ Secrets)
+    creds_info = gcal_creds if gcal_creds else st.secrets.get("google_calendar_credentials", None)
     if not creds_info:
+        print("คำเตือน: ไม่พบ google_calendar_credentials (ไม่มี gcal_creds และ secrets ไม่มีค่า)")
         return None
     try:
-        creds_dict = dict(creds_info)
+        creds_dict = dict(creds_info) if not isinstance(creds_info, dict) else creds_info
         if "private_key" in creds_dict:
             pk_val = creds_dict["private_key"]
             if pk_val.startswith("-----BEGIN PRIVATE KEY-----\\nn"):
@@ -1106,19 +1140,26 @@ def get_calendar_service():
         service = build('calendar', 'v3', credentials=creds)
         return service
     except Exception as e:
-        print(f"เกิดข้อผิดพลาดในการเชื่อมต่อ Google Calendar API: {e}")
+        err_msg = f"เกิดข้อผิดพลาดในการเชื่อมต่อ Google Calendar API: {e}"
+        print(err_msg)
+        # เก็บ error ไว้ใน session_state เพื่อแสดงผลหลังจากจองแล้ว
+        st.session_state["gcal_last_error"] = err_msg
         return None
 
 def create_gcal_event(dept, title, appointment_date, appointment_time, description, location):
     """บันทึกนัดหมายลงใน Google Calendar อัตโนมัติในเบื้องหลัง"""
     service = get_calendar_service()
     if not service:
-        print("คำเตือน: ยังไม่ได้ตั้งค่า google_calendar_credentials จึงข้ามการบันทึกลงปฏิทินกลาง รพ.สต.")
+        err = st.session_state.get("gcal_last_error", "ยังไม่ได้ตั้งค่า google_calendar_credentials")
+        print(f"คำเตือน: ไม่สามารถเชื่อมต่อ Google Calendar: {err}")
+        st.session_state["gcal_booking_error"] = f"ไม่สามารถเชื่อมต่อ Google Calendar: {err}"
         return None
         
     calendar_id = get_calendar_id(dept)
     if not calendar_id:
-        print(f"คำเตือน: ไม่พบ Calendar ID สำหรับแผนก {dept} หรือปฏิทินกลาง จึงข้ามการบันทึก")
+        msg = f"ไม่พบ Calendar ID สำหรับแผนก {dept}"
+        print(f"คำเตือน: {msg}")
+        st.session_state["gcal_booking_error"] = msg
         return None
         
     # แปลงเวลา
@@ -1158,10 +1199,13 @@ def create_gcal_event(dept, title, appointment_date, appointment_time, descripti
     
     try:
         event_result = service.events().insert(calendarId=calendar_id, body=event).execute()
-        print(f"บันทึกคิวลง Google Calendar กลางเรียบร้อยแล้ว: {event_result.get('htmlLink')}")
+        print(f"บันทึกคิวลง Google Calendar เรียบร้อยแล้ว: {event_result.get('htmlLink')}")
+        st.session_state.pop("gcal_booking_error", None)  # เคลียร error เมื่อสำเร็จ
         return event_result.get('id')
     except Exception as e:
-        print(f"เกิดข้อผิดพลาดในการบันทึกคิวลง Google Calendar: {e}")
+        err_msg = f"บันทึกคิวลง Google Calendar ล้มเหลว: {e}"
+        print(err_msg)
+        st.session_state["gcal_booking_error"] = err_msg
         return None
 
 def create_secondary_calendar(display_name):
@@ -3162,7 +3206,11 @@ if app_mode == "ผู้รับบริการ (LINE LIFF)":
             <p style="margin-top: 0rem; margin-bottom: 0; color: #666; font-size: 0.9rem;">รหัสอ้างอิงการจองคิว: #{st.session_state.appointment_id}</p>
         </div>
         """, unsafe_allow_html=True)
-        
+
+        # แสดง error Google Calendar ถ้ามี (เพื่อ debug)
+        if st.session_state.get("gcal_booking_error"):
+            st.warning(f"⚠️ **Google Calendar:** {st.session_state['gcal_booking_error']}")
+
         st.write("#### 📑 สรุปรายละเอียดการนัดหมาย")
         
         st.markdown(f"""
@@ -4210,6 +4258,73 @@ else:
                                 </div>
                             </div>
                             """, unsafe_allow_html=True)
+
+                    # ============================================================
+                    # แสดง Google Calendar IDs ของทุกแผนก (สำหรับคัดลอกไปใส่ secrets)
+                    # ============================================================
+                    st.markdown("---")
+                    st.write("#### 📅 Google Calendar IDs (สำหรับตั้งค่า Streamlit Cloud Secrets)")
+                    st.info("⚠️ ระบบไม่สามารถเขียนลง secrets.toml โดยตรงได้ — คัดลอกค่าด้านล่างไปใส่ใน **Streamlit Cloud → App Settings → Secrets** แทน")
+
+                    if depts_in_db:
+                        # ดึง Calendar ID ของทุกแผนกจาก Supabase
+                        gcal_lines = []
+                        dept_cal_data = []
+                        for d in depts_in_db:
+                            dept_key = d["key"]
+                            # อ่านจาก Supabase system_settings ก่อน
+                            cal_id = ""
+                            try:
+                                if supabase_client:
+                                    res_cal = supabase_client.table("system_settings").select("gcal_calendar_id").eq("department", dept_key).execute()
+                                    if res_cal.data:
+                                        cal_id = res_cal.data[0].get("gcal_calendar_id", "")
+                            except Exception:
+                                pass
+                            # fallback ไป secrets
+                            if not cal_id:
+                                s_key = get_gcal_secret_key(dept_key)
+                                cal_id = st.secrets.get(s_key, "")
+                            dept_cal_data.append({"dept": dept_key, "name": d["display_name"], "cal_id": cal_id})
+                            # สร้าง secret key ชื่อ: GOOGLE_CALENDAR_ID_<DEPT_KEY_UPPER>
+                            secret_var = f"GOOGLE_CALENDAR_ID_{dept_key.upper()}"
+                            gcal_lines.append(f'{secret_var} = "{cal_id}"')
+
+                        # แสดงตาราง Calendar ID ของแต่ละแผนก
+                        for item in dept_cal_data:
+                            secret_var = f"GOOGLE_CALENDAR_ID_{item['dept'].upper()}"
+                            status_icon = "✅" if item["cal_id"] else "❌ ยังไม่มี Calendar ID"
+                            with st.expander(f"{status_icon} {item['name']} (`{item['dept']}`)"):
+                                if item["cal_id"]:
+                                    st.code(f'{secret_var} = "{item["cal_id"]}"', language="toml")
+                                    # ปุ่ม sync Calendar ID ลง Supabase system_settings
+                                    if st.button(f"🔄 Sync Calendar ID ลง Supabase", key=f"sync_cal_{item['dept']}"):
+                                        try:
+                                            supabase_client.table("system_settings").update({"gcal_calendar_id": item["cal_id"]}).eq("department", item["dept"]).execute()
+                                            st.success("✅ Sync Calendar ID ลง Supabase สำเร็จ")
+                                            st.rerun()
+                                        except Exception as ex:
+                                            st.error(f"❌ Sync ล้มเหลว: {ex}")
+                                else:
+                                    st.warning("ยังไม่มี Calendar ID — ระบบจะสร้างปฏิทินอัตโนมัติเมื่อเพิ่มแผนกใหม่")
+                                    if st.button(f"🆕 สร้าง Google Calendar สำหรับแผนกนี้", key=f"create_cal_{item['dept']}"):
+                                        new_id = create_secondary_calendar(item["name"])
+                                        if new_id:
+                                            try:
+                                                supabase_client.table("system_settings").update({"gcal_calendar_id": new_id}).eq("department", item["dept"]).execute()
+                                                st.success(f"✅ สร้างปฏิทินสำเร็จ! Calendar ID: `{new_id}`")
+                                                st.rerun()
+                                            except Exception as ex:
+                                                st.error(f"❌ บันทึก Calendar ID ล้มเหลว: {ex}")
+                                        else:
+                                            st.error("❌ ไม่สามารถสร้างปฏิทินได้ — ตรวจสอบ google_calendar_credentials ใน secrets")
+
+                        # แสดงค่าทั้งหมดในรูปแบบ secrets.toml เพื่อคัดลอก
+                        st.write("#### 📋 คัดลอกค่าทั้งหมดไปใส่ Streamlit Cloud Secrets:")
+                        secrets_text = "\n".join(gcal_lines)
+                        st.code(secrets_text, language="toml")
+                        st.caption("วิธีนำไปใช้: ไปที่ Streamlit Cloud → เลือก App → Settings → Secrets → วางค่าด้านบนเพิ่มเติมลงไป → Save")
+
                             
                 with sub_dept_add:
                     st.write("#### ➕ เพิ่มแผนกบริการใหม่")
