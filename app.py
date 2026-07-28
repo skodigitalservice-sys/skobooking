@@ -2699,71 +2699,12 @@ with st.sidebar:
 # ----------------- LINE LIFF Login Redirector integration -----------------
 def render_liff_login(liff_id):
     """
-    ฝัง LIFF SDK โดยตรงใน Streamlit:
-    - ถ้ามี userId ใน session_state แล้ว → ข้ามการ init (ไม่ต้องทำซ้ำ)
-    - ถ้ายังไม่มี → init LIFF และดึง Profile แล้ว redirect กลับมาพร้อม userId ใน URL
+    ระบบรับ userId จาก redirect.html ที่ host บน GitHub Pages
+    Flow: LINE OA → redirect.html (GitHub Pages, top-level) → LIFF auth → Streamlit?userId=Uxxxx
+    เหตุที่ไม่ใช้ LIFF SDK ในนี้: components.html() สร้าง iframe
+    และ LIFF SDK ต้องการ top-level page context จึงทำงานใน iframe ไม่ได้
     """
-    # ถ้ามี line_user_id ใน session_state แล้ว ไม่ต้องทำอีก
-    if st.session_state.get("line_user_id", ""):
-        return
-
-    # ถ้า liff_id ไม่ได้ตั้งค่า ข้ามไป (ระบบจะแสดง warning banner)
-    if not liff_id or "xxxxxxxx" in liff_id:
-        return
-
-    # สร้าง base URL ของแอปนี้ (ไม่รวม query string)
-    # ใช้ st.query_params เพื่อสร้าง redirect URL กลับมาหาแอปเอง
-    try:
-        current_dept = st.session_state.get("selected_dept", "")
-        dept_param = f"&dept={current_dept}" if current_dept else ""
-    except Exception:
-        dept_param = ""
-
-    components.html(f"""
-    <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
-    <div id="liff-status" style="display:none;"></div>
-    <script>
-    (function() {{
-        // NOTE: components.html() รันใน iframe ดังนั้นต้องใช้ window.top
-        // เพื่ออ่าน/เขียน URL ของหน้าหลัก (parent) ได้ถูกต้อง
-        try {{
-            var topLocation = window.top.location;
-            var urlParams = new URLSearchParams(topLocation.search);
-
-            // ถ้ามี userId ใน URL หน้าหลักแล้ว ไม่ต้อง init ซ้ำ
-            if (urlParams.get('userId')) {{
-                return;
-            }}
-
-            liff.init({{ liffId: "{liff_id}" }}).then(function() {{
-                if (!liff.isLoggedIn()) {{
-                    // ส่ง redirectUri เป็น URL หน้าหลัก ไม่ใช่ iframe
-                    liff.login({{ redirectUri: topLocation.href }});
-                }} else {{
-                    liff.getProfile().then(function(profile) {{
-                        // สร้าง URL ใหม่จาก URL หน้าหลักพร้อม userId, displayName, pictureUrl
-                        var newUrl = new URL(topLocation.href);
-                        newUrl.searchParams.set('userId', profile.userId);
-                        newUrl.searchParams.set('displayName', profile.displayName);
-                        if (profile.pictureUrl) {{
-                            newUrl.searchParams.set('pictureUrl', profile.pictureUrl);
-                        }}
-                        // Redirect หน้าหลัก (parent) เพื่อให้ Streamlit รับ query params ใหม่
-                        topLocation.replace(newUrl.toString());
-                    }}).catch(function(err) {{
-                        console.error('LIFF getProfile error:', err);
-                    }});
-                }}
-            }}).catch(function(err) {{
-                console.error('LIFF init error:', err);
-            }});
-        }} catch(e) {{
-            // กรณี cross-origin block (ไม่น่าเกิดใน Streamlit Cloud)
-            console.error('window.top access error:', e);
-        }}
-    }})();
-    </script>
-    """, height=0)
+    pass  # userId ถูกเซ็ตผ่าน query_params เมื่อ redirect.html ส่งกลับมา (ดูโค้ดบรรทัด 458-463)
 
 # ----------------- PATIENT PORTAL (LINE LIFF) -----------------
 if app_mode == "ผู้รับบริการ (LINE LIFF)":
