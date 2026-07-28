@@ -2698,9 +2698,64 @@ with st.sidebar:
 
 # ----------------- LINE LIFF Login Redirector integration -----------------
 def render_liff_login(liff_id):
-    # เข้าสู่ระบบผ่านหน้าล็อกอินหลัก (redirect.html) ที่ตั้งไว้ใน LINE Developers Console
-    # ระบบจะส่งค่า userId, displayName กลับมาทาง URL query parameters อัตโนมัติ
-    pass
+    """
+    ฝัง LIFF SDK โดยตรงใน Streamlit:
+    - ถ้ามี userId ใน session_state แล้ว → ข้ามการ init (ไม่ต้องทำซ้ำ)
+    - ถ้ายังไม่มี → init LIFF และดึง Profile แล้ว redirect กลับมาพร้อม userId ใน URL
+    """
+    # ถ้ามี line_user_id ใน session_state แล้ว ไม่ต้องทำอีก
+    if st.session_state.get("line_user_id", ""):
+        return
+
+    # ถ้า liff_id ไม่ได้ตั้งค่า ข้ามไป (ระบบจะแสดง warning banner)
+    if not liff_id or "xxxxxxxx" in liff_id:
+        return
+
+    # สร้าง base URL ของแอปนี้ (ไม่รวม query string)
+    # ใช้ st.query_params เพื่อสร้าง redirect URL กลับมาหาแอปเอง
+    try:
+        current_dept = st.session_state.get("selected_dept", "")
+        dept_param = f"&dept={current_dept}" if current_dept else ""
+    except Exception:
+        dept_param = ""
+
+    components.html(f"""
+    <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+    <div id="liff-status" style="display:none;"></div>
+    <script>
+    (function() {{
+        // ตรวจว่า userId มีใน URL query string แล้วหรือยัง (จาก redirect ก่อนหน้า)
+        var urlParams = new URLSearchParams(window.location.search);
+        if (urlParams.get('userId')) {{
+            // มีแล้ว ไม่ต้อง init ซ้ำ
+            return;
+        }}
+
+        liff.init({{ liffId: "{liff_id}" }}).then(function() {{
+            if (!liff.isLoggedIn()) {{
+                // ขอ login ผ่าน LINE — redirect กลับมาที่หน้านี้เอง
+                liff.login({{ redirectUri: window.location.href }});
+            }} else {{
+                liff.getProfile().then(function(profile) {{
+                    // สร้าง URL ใหม่พร้อม userId, displayName, pictureUrl
+                    var newUrl = new URL(window.location.href);
+                    newUrl.searchParams.set('userId', profile.userId);
+                    newUrl.searchParams.set('displayName', profile.displayName);
+                    if (profile.pictureUrl) {{
+                        newUrl.searchParams.set('pictureUrl', profile.pictureUrl);
+                    }}
+                    // Redirect เพื่อให้ Streamlit รับ query params ใหม่
+                    window.location.replace(newUrl.toString());
+                }}).catch(function(err) {{
+                    console.error('LIFF getProfile error:', err);
+                }});
+            }}
+        }}).catch(function(err) {{
+            console.error('LIFF init error:', err);
+        }});
+    }})();
+    </script>
+    """, height=0)
 
 # ----------------- PATIENT PORTAL (LINE LIFF) -----------------
 if app_mode == "ผู้รับบริการ (LINE LIFF)":
