@@ -462,6 +462,13 @@ if "userId" in query_params:
     st.session_state.line_display_name = query_params.get("displayName", "ผู้ใช้งาน LINE")
     st.session_state.line_picture_url = query_params.get("pictureUrl", "")
 
+# รับข้อมูล LIFF error จาก redirect.html เพื่อแสดงผล debug
+if "liff_error" in query_params:
+    st.session_state["liff_debug_error"] = query_params["liff_error"]
+elif "userId" in query_params:
+    # เคลียร์ error เมื่อ login สำเร็จ
+    st.session_state.pop("liff_debug_error", None)
+
 # ตรวจสอบ Parameter เลือกแผนกอัตโนมัติจาก Rich Menu
 if "dept" in query_params:
     dept_val = query_params["dept"].lower()
@@ -2738,6 +2745,10 @@ if app_mode == "ผู้รับบริการ (LINE LIFF)":
             </div>
         </div>
         """, unsafe_allow_html=True)
+        # แสดง LIFF debug error ถ้ามี (จาก redirect.html)
+        if st.session_state.get("liff_debug_error"):
+            st.error(f"🔍 **LIFF Debug Error:** `{st.session_state['liff_debug_error']}`")
+
     else:
         st.markdown(f"""
         <div style="
